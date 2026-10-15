@@ -51,6 +51,7 @@ from .. import capture as capture_mod
 from .. import input as input_mod, match, state as state_mod, win32, window
 from .. import programs as programs_mod
 from .. import verdict as verdict_mod
+from .. import watchdog as watchdog_mod
 from ..errors import GuardFailure
 from ..orchestrator import (
     CHANGE_THRESHOLD, CLICK_RETRIES, CLICK_RETRY_INTERVAL, COMPLETED, FAILED,
@@ -164,6 +165,64 @@ def navigate_to_tasks(state, frame, registry, args, log):
         f"导航 {NAV_RETRIES} 次后仍未进入任务页（锚点始终无法唯一定位）。\n"
         f"  => 可能原因：ok-ww 版本升级导致界面改版（锚点需重新采集）、"
         f"点击落空、或当前不在可导航的页面。")
+
+
+def nte_wait_game_settled(state, log):
+    """等 ok-nte 自动把游戏拉起来、且画面重新可读（FAULT #28）。
+
+    为什么需要：**ok-nte 窗口一出现就自己去拉游戏**（实测每次启动都有
+    `showEvent Kill Launcher After Start` → `Starting launcher from ...`，
+    间隔约 4 秒，与「点开始」无关）。游戏是全屏 DirectX，起来时屏幕抓图
+    返回纯黑 ⇒ 撞上这段就会 INV-13 失败。
+
+    实测成功与失败的唯一差别就是**节点 8 开工时游戏处于哪个阶段**：
+    游戏已稳定 ⇒ 一路通；正在起 ⇒ 抓帧全黑、节点 8 只活 2.4s。
+
+    判据落在「**抓帧是否可读**」而不是「进程在不在」：
+    进程刚出现时窗口还没全屏，此刻抓到的可能仍是 ok-nte，下一瞬才变黑。
+    故必须连续若干次抓到非全黑帧才算稳定。
+
+    返回 True 表示已稳定；False 表示等待超时（**不抛异常** —— 此时画面可能
+    只是暂时不可读，继续往下走让既有的 INV-13 闸门去裁决，比在这里直接
+    失败更符合「证据不足不臆断」）。
+    """
+    if not watchdog_mod.game_processes(programs_mod.NTE):
+        log(f"  ok-nte 会自动拉起游戏；等它出现（上限 {NTE_GAME_WAIT_SECONDS:.0f}s）")
+        t0 = time.time()
+        while time.time() - t0 < NTE_GAME_WAIT_SECONDS:
+            if watchdog_mod.game_processes(programs_mod.NTE):
+                log(f"  [OK] 游戏进程已出现（等了 {time.time() - t0:.0f}s）")
+                break
+            time.sleep(NTE_SETTLE_POLL)
+        else:
+            log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 仍未见游戏进程；"
+                "继续往下走（画面判据会自行裁决）")
+            return False
+    else:
+        log("  游戏进程已在运行")
+
+    # 连续 NTE_READABLE_SAMPLES 次抓到可读帧，才算画面稳定下来
+    hwnd = state.get("hwnd")
+    if not hwnd:
+        return False
+    good = 0
+    t0 = time.time()
+    while time.time() - t0 < NTE_GAME_WAIT_SECONDS:
+        try:
+            input_mod.ensure_foreground(hwnd, log=None)
+            fr = capture_mod.grab_frame(hwnd)
+            good += 1
+            if good >= NTE_READABLE_SAMPLES:
+                log(f"  [OK] 画面已稳定（连续 {good} 次可读，"
+                    f"均值 RGB {fr.stats.get('mean_rgb') if fr.stats else '?'}）")
+                return True
+        except GuardFailure:
+            good = 0
+        time.sleep(NTE_SETTLE_POLL)
+
+    log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 画面仍未稳定"
+        f"（连续可读仅 {good}/{NTE_READABLE_SAMPLES} 次）")
+    return False
 
 
 def nte_navigate_to_daily(state, frame, args, log):
@@ -344,6 +403,32 @@ CLICK_PIXEL_FRAC = 0.002      # 变化像素占比 >= 0.2% 即认为「有变化
 # 留下全屏孤儿游戏窗口。这段窗口内等它自己退出（等不到就交给节点 9）。
 NTE_SETTLE_SECONDS = 20.0
 
+# --- FAULT #28：ok-nte 一启动就自动拉游戏，游戏全屏会把抓帧打成全黑 --------
+#
+# 实测（ok-script.log 每次启动都有这一对，间隔 ~4 秒）：
+#
+#     MainWindow:MainWindow showEvent Kill Launcher After Start
+#     LauncherTask:Starting launcher from configured path: ...NTEGame.exe
+#
+# 即 **ok-nte 窗口一出现就自己去拉游戏**，与「点开始」无关。
+# 游戏起来时是全屏 DirectX，屏幕抓图返回**纯黑** ⇒ INV-13 拦住 ⇒ 节点 8 只有 2.4s
+# 就 FAILED（实测 run-20261016-031137）。
+#
+# 成功与失败只差**时序**：
+#   - run-20261016-024410（成功）：节点 8 起跑 02:44:10；游戏 02:45:29 就位；
+#     点击在 02:46+ ⇒ 点的时候游戏早已稳定，画面可读。
+#   - run-20261016-031137（失败）：节点 8 起跑 03:11:37；03:12:35 ok-nte 拉游戏；
+#     节点 8 恰在 **03:12:35** 开始干活 ⇒ 抓帧撞上游戏全屏 ⇒ 全黑。
+#
+# 故节点 8 在 ok-nte 上开工前，必须先等「游戏拉起并稳定」这件事过去：
+#   1. 若游戏**尚未出现**：等它出现（ok-nte 一定会拉）；
+#   2. 出现后：再等画面**连续可读**（不是全黑）若干次，才算稳定。
+# 只看「进程在不在」不够 —— 进程刚出现时窗口还没全屏，抓到的可能仍是
+# ok-nte；而下一瞬就变全黑了。所以判据落在**抓帧是否可读**上。
+NTE_GAME_WAIT_SECONDS = 120.0   # 等游戏进程出现的上限（实测 03:12:35→03:12:58 约 23s）
+NTE_READABLE_SAMPLES = 3        # 需连续这么多次「可读」才算稳定
+NTE_SETTLE_POLL = 2.0           # 稳定检测的轮询间隔
+
 
 def frame_changed(before, after, log=None):
     """判断点击后画面是否真的变了；返回 (changed, 说明串)。
@@ -406,6 +491,12 @@ def click_and_confirm(state, frame, registry, args, log, prog=None):
     for attempt in range(1, CLICK_RETRIES + 1):
         log(f"\n[8c] 点击 第 {attempt}/{CLICK_RETRIES} 轮")
         if prog is not None and prog.key == "nte":
+            # ⚠️ FAULT #28：ok-nte 会自动拉游戏，全屏后抓帧全黑。
+            # 必须**先**等它拉完并稳定，再去做导航 —— 否则导航这一次抓帧
+            # 就会撞上全黑（实测节点 8 只活 2.4s 就 FAILED）。
+            # 只做一次：重试轮次里游戏已经在跑，不必重复等待。
+            if attempt == 1 and not (args.offline or args.dry_run):
+                nte_wait_game_settled(state, log)
             frame, _ = nte_navigate_to_daily(state, frame, args, log)
             sp, _loc = nte_locate_start_button(state, frame, log, offline=args.offline)
         else:
