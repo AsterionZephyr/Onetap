@@ -1,8 +1,8 @@
 # 断点式编排（`orchestrator/steps/`）
 
 > **这份文档回答**：怎么按节点单独跑、出错时改哪一份、怎么接着往下跑。
-> 上游依据：[README-ORCHESTRATOR.md](../README-ORCHESTRATOR.md) §5「编排流程」、
-> [IMPLEMENTATION-0.1.md](../docs/IMPLEMENTATION-0.1.md)、[FRAMEWORK.md](../FRAMEWORK.md)。
+> 上游依据：[README-ORCHESTRATOR.md](./README-ORCHESTRATOR.md) §5「编排流程」、
+> [IMPLEMENTATION-0.1.md](./docs/IMPLEMENTATION-0.1.md)、[FRAMEWORK.md](./FRAMEWORK.md)。
 
 ---
 
@@ -269,7 +269,7 @@ cd E:\TOOLS\ScriptsGames\Onetap
 **身份校验把「不是任务页」也一并拒了**，导致链条进不到节点 8 去导航。
 
 ⇒ 身份校验（在不在 ok-ww）与页面校验（在不在任务页）**语义被混在一起**。
-按 [IMPLEMENTATION-0.1.md](../docs/IMPLEMENTATION-0.1.md) §3.1，
+按 [IMPLEMENTATION-0.1.md](./docs/IMPLEMENTATION-0.1.md) §3.1，
 身份校验本来是通过的（score=1.0000）—— 差异在于**窗口尺寸**，见 §7.1。
 
 ### 7.3 `exit_notice` 资产仍然缺失
