@@ -27,6 +27,7 @@ import argparse
 import time
 
 from .. import cleanup as cleanup_mod
+from .. import watchdog
 from .. import window
 from ..orchestrator import COMPLETED, FAILED, TIMEOUT, UNKNOWN
 
@@ -74,10 +75,34 @@ def body(args, state, log):
                 f" —— 可能仍在收尾，稍后再看")
         else:
             log("  确认：无残留进程")
+
+        # ⚠️ 游戏侧也要**确认**（不改 Q3「不杀」的决策，只是把状态说出来）。
+        #
+        # 为什么必须查：Q3 的前提是「程序退出时自己把游戏杀掉」。实测该前提
+        # **只对游戏本体成立** —— ok-nte 会关 `HTGame.exe`，但**留下 launcher**
+        # `NTEGame.exe`（实测 2026-10-16 两次跑完都留：pid=43684 与 pid=25736，
+        # 带 8 个窗口含托盘图标）。上一版这里只看 `window.running(prog)`，
+        # 于是「无残留进程」这句话**只覆盖目标程序自己**，游戏侧的残留
+        # 完全没被提及 —— 属于「报了个让人以为一切干净的结论」。
+        game = []
+        try:
+            game = watchdog.game_processes(prog)
+        except Exception as e:                      # noqa: BLE001
+            log(f"  [警告] 查游戏进程失败：{e}")
+        if game:
+            names = sorted({n for n, _p, _e in game})
+            log(f"  [注意] 游戏侧仍有进程存活：{[(n, p) for n, p, _ in game]}")
+            log(f"         {'/'.join(names)} —— {prog.display} 通常只关游戏本体，"
+                f"launcher 可能被留下。框架按 Q3 **不主动杀**；"
+                f"如需清理：`watchdog.force_close({prog.key})` 或加 `--force`。")
+        else:
+            log("  确认：游戏侧无残留进程")
+
         return ("ok",
                 {"reason": "completed", "killed": [], "skipped": [],
-                 "still_alive": len(alive)},
-                "正常完成，未杀任何进程")
+                 "still_alive": len(alive), "game_alive": len(game)},
+                ("正常完成，未杀任何进程"
+                 + (f"（游戏侧仍有 {len(game)} 个进程存活）" if game else "")))
 
     # --- 未提权：无力终止 -------------------------------------------------
     if state.get("skip_admin_check"):
