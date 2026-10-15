@@ -85,6 +85,29 @@ cd E:\TOOLS\ScriptsGames\Onetap
 | `--show-cmd` | 打印每节的完整命令行（便于手工复现） |
 | `--list` | 只列链条 |
 | `--step-arg ARG` | 原样透传给每一个 step 的额外参数 |
+| `--target ww\|nte\|both` | 目标程序。**省略**时跟随 `state.json` 的记录 |
+| `--run-timeout SEC` | 整轮墙钟上限（默认 1800s = 半小时） |
+| `--keep-game` | 到点收尾时**不关游戏** |
+| `--no-watchdog` | 停用整轮时间上限 |
+
+**`--target both` 串联两程序**：按 ok-ww → ok-nte 顺序**各跑一遍完整链条**，
+不是把两个程序的节点混在一条链里。三个实现要点：
+
+1. 两轮各用**子目录**（`<run-dir>/ww`、`<run-dir>/nte`）。共用目录的话
+   两轮节点号完全相同（都叫 `step8.log`），**后一轮会覆盖前一轮**，
+   事后分不清哪份日志属于哪个程序。
+2. **一个程序失败不中断另一个**（用户裁定可无人值守）。退出码仍非 0 供脚本判断。
+3. 每轮**各自独立计** 30 分钟上限，不是共享一个总上限。
+
+```bash
+# 串起来跑一遍（ok-ww 先，ok-nte 后）
+python -m orchestrator.steps.main --target both
+
+# 只看编排不碰真机
+python -m orchestrator.steps.main --target both --dry-run --only 1
+```
+
+⚠️ **`both` 不是并发**：两程序沿用 INV-15 的独占前提，**串行**执行。
 
 另有**透传给特定节点**的参数（主控自己不做处理，只转发）：
 `--skip-admin-check`（节点 1）、`--no-launch`（节点 2）、
