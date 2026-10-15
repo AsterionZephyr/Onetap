@@ -27,6 +27,9 @@ SW_RESTORE = 9
 
 GA_ROOT = 2
 
+# ALT 虚拟键：用于「抖一下」以解除前台锁（FAULT #29）
+VK_MENU = 0x12
+
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
@@ -253,9 +256,77 @@ def restore_window(hwnd):
     return bool(user32.ShowWindow(hwnd, SW_RESTORE))
 
 
+def _alt_nudge():
+    """按一下再松开 ALT —— 用来向系统「声明」本进程想抢占前台。
+
+    Windows 的前台锁有一条规则：**刚收到用户输入的进程**可以抢前台。
+    合成一个 ALT 按键就能满足这条，从而让随后的 SetForegroundWindow 被接受。
+    这是 AttachThreadInput 之外的第二手准备。
+    """
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD),
+                    ("time", wt.DWORD), ("dwExtraInfo", ctypes.POINTER(wt.ULONG))]
+
+    class _INPUTunion(ctypes.Union):
+        _fields_ = [("ki", KEYBDINPUT), ("pad", ctypes.c_byte * 24)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wt.DWORD), ("u", _INPUTunion)]
+
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_KEYUP = 0x0002
+
+    down = INPUT(type=INPUT_KEYBOARD,
+                 u=_INPUTunion(ki=KEYBDINPUT(VK_MENU, 0, 0, 0, None)))
+    up = INPUT(type=INPUT_KEYBOARD,
+               u=_INPUTunion(ki=KEYBDINPUT(VK_MENU, 0, KEYEVENTF_KEYUP, 0, None)))
+    user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
+    user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
+
+
 def set_foreground(hwnd):
-    """尝试把窗口提到前台。返回 True 只说明调用被接受，**不代表窗口可用**。"""
+    """尝试把窗口提到前台。返回 True 只说明**调用被接受**，不代表窗口可用。
+
+    ⚠️ FAULT #29：裸调 SetForegroundWindow **不够**。
+    Windows 有「前台锁」：当**别的进程**持有前台时，本调用会被直接拒绝
+    （返回 0），而且**重试同一个调用永远不会成功** —— 实测在 DSH 窗口
+    处于前台时，连续 6 次全部失败；DSH 不在前台时第 1 次就成功。
+
+    因此这里按优先级依次尝试三种手段（这是 HANDOFF §5「SetForegroundWindow
+    + 每次验证」里被漏掉的后半句）：
+
+      1. 裸 SetForegroundWindow —— 最快，前台本来就是自己或无人竞争时即可；
+      2. **AttachThreadInput**：把自己的线程输入队列附加到前台窗口的线程上，
+         使本进程被视为「可抢占前台」，再调 SetForegroundWindow，之后解除附加；
+      3. **ALT 抖动**：合成一次 ALT 按键，让系统认为刚有用户输入，再调一次。
+
+    返回 True 表示**至少有一次调用被接受**；调用方仍须用 GetForegroundWindow
+    自行验证（见 input.ensure_foreground）。
+    """
+    if user32.SetForegroundWindow(hwnd):
+        return True
+
+    # --- 手段 2：AttachThreadInput ---
+    fg = user32.GetForegroundWindow()
+    if fg:
+        my_tid = kernel32.GetCurrentThreadId()
+        fg_tid = user32.GetWindowThreadProcessId(fg, None)
+        if fg_tid and fg_tid != my_tid:
+            attached = bool(user32.AttachThreadInput(my_tid, fg_tid, True))
+            try:
+                if user32.SetForegroundWindow(hwnd):
+                    return True
+                # 附加状态下再来一次 ALT 抖动，成功率更高
+                _alt_nudge()
+                if user32.SetForegroundWindow(hwnd):
+                    return True
+            finally:
+                user32.AttachThreadInput(my_tid, fg_tid, False)
+
+    # --- 手段 3：单独 ALT 抖动 ---
+    _alt_nudge()
     return bool(user32.SetForegroundWindow(hwnd))
+
 
 
 def foreground_hwnd():

@@ -206,10 +206,22 @@ def nte_wait_game_settled(state, log):
     if not hwnd:
         return False
     good = 0
+    fg_fail = 0
     t0 = time.time()
     while time.time() - t0 < NTE_GAME_WAIT_SECONDS:
+        # ⚠️ 必须把「置前台失败」与「帧不可读」分开报（FAULT #29）。
+        # 原先二者共用一个 `except GuardFailure`，于是置前台连续失败时
+        # 被打成「画面仍未稳定」——**归因错误**，会把人引去查游戏遮挡，
+        # 而真凶是前台锁。两者都会让抓帧失败，但修法完全不同。
         try:
             input_mod.ensure_foreground(hwnd, log=None)
+        except GuardFailure as e:
+            fg_fail += 1
+            good = 0
+            time.sleep(NTE_SETTLE_POLL)
+            continue
+
+        try:
             fr = capture_mod.grab_frame(hwnd)
             good += 1
             if good >= NTE_READABLE_SAMPLES:
@@ -220,8 +232,14 @@ def nte_wait_game_settled(state, log):
             good = 0
         time.sleep(NTE_SETTLE_POLL)
 
-    log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 画面仍未稳定"
-        f"（连续可读仅 {good}/{NTE_READABLE_SAMPLES} 次）")
+    if fg_fail and good == 0:
+        log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 仍拿不到前台"
+            f"（置前台失败 {fg_fail} 次）—— 这不是画面问题，"
+            f"是**前台锁**被别的窗口占着（INV-8/FAULT #29）。"
+            f"请关掉占前台的窗口（常见：DSH 自己的窗口、浏览器）")
+    else:
+        log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 画面仍未稳定"
+            f"（连续可读仅 {good}/{NTE_READABLE_SAMPLES} 次）")
     return False
 
 
