@@ -48,6 +48,13 @@ def extra_args(ap):
                     help="清理原因标签（默认取 state.json 的 result）")
     ap.add_argument("--no-kill", action="store_true",
                     help="只规划不终止（等价于 --survey，语义更明确）")
+    # ⚠️ `--keep-game` 是**主控 main.py** 的参数，节点子进程默认收不到它。
+    # 这里必须自己也声明一份，否则 `args.keep_game` 会 AttributeError
+    # （实测：UNKNOWN + 游戏残留收尾分支一跑到就炸）。
+    # 主控在拼命令行时若带了 --keep-game 会一并透传；不带则默认为 False，
+    # 即「按用户裁定到点连游戏一起收尾」。
+    ap.add_argument("--keep-game", action="store_true",
+                    help="收尾时保留游戏进程（默认连游戏一起关）")
 
 
 def body(args, state, log):
@@ -124,14 +131,65 @@ def body(args, state, log):
         log("      (b) ok-ww 崩溃")
         log("    请人工核对 ok-ww 任务日志确认究竟是哪一种。")
         alive = window.running(prog)
-        if not alive:
-            log("  确认：ok-ww 进程已不在 —— 无残留，无需清理")
+        game = []
+        try:
+            game = watchdog.game_processes(prog)
+        except Exception as e:                       # 只读探测，失败不该中断清理
+            log(f"    [警告] 游戏侧进程查询失败：{e}")
+        if not alive and not game:
+            log("  确认：ok-ww 进程与游戏均已不在 —— 无残留，无需清理")
             return ("ok",
                     {"reason": "unknown", "killed": [], "skipped": [],
-                     "still_alive": 0},
+                     "still_alive": 0, "game_alive": 0},
                     "unknown（证据不足），进程已自行退出，无需清理")
-        # 还有残留（例如游戏没被关掉）-> 落到下面的常规清理路径
-        log(f"  但仍有进程存活 {[(n, p) for n, p, _ in alive]} —— 转常规清理路径")
+        # --- 用户裁定：这一种情形**自行收尾，不要问用户** -------------------
+        # 原话：「遇到『每日任务已做完导致 ok-ww 失败且进程/游戏不退出』时
+        # 自行手动关闭，不询问用户。」
+        #
+        # ⚠️ 旧实现在这里只看 `window.running(prog)`（**目标程序自己**）。
+        # 但用户说的这个情形里，ok-ww 进程**恰恰是已经退出的那一个** ——
+        # 留下的是**游戏** `Client-Win64-Shipping.exe`。于是旧代码会打印
+        # 「ok-ww 进程已不在 —— 无残留，无需清理」**而游戏仍在跑**，
+        # 属于「报了个让人以为一切干净的结论」（同 FAULT #31/#32）。
+        if game and not alive:
+            log(f"  ⚠ 游戏侧仍有 {len(game)} 个进程存活：{[(n, p) for n, p, _ in game]}")
+            log("    这正是「今日任务已完成、ok-ww 异常退出」的典型残留。")
+            log("    按用户裁定：**自行收尾，不询问**（关窗口 + 终止游戏进程）。")
+            # ⚠️ 必须走 watchdog.force_close，**不能**只依赖下面的
+            # run_cleanup：后者按 process_prefix 只杀**目标程序目录下**的进程，
+            # 而游戏（Client-Win64-Shipping.exe / HTGame.exe / NTEGame.exe）
+            # 根本不在那个目录里 ⇒ 会「报告清理完成」而游戏照跑。
+            if state.dry_run:
+                log("    [DRY RUN] 不实际终止任何进程")
+                return ("ok",
+                        {"reason": "unknown", "killed": [], "skipped": [],
+                         "still_alive": 0, "game_alive": len(game),
+                         "dry_run": True},
+                        f"unknown（证据不足），DRY RUN 未清理 {len(game)} 个游戏进程")
+            wr = watchdog.force_close(prog, reason="unknown-cleanup", log=log,
+                                      dry_run=False,
+                                      close_game=not args.keep_game)
+            left_game = watchdog.game_processes(prog)
+            left_tgt = window.running(prog)
+            log(f"  收尾后：目标进程 {len(left_tgt)} 个，游戏进程 {len(left_game)} 个")
+            status = "ok" if not left_game and not left_tgt else "failed"
+            # ⚠️ 措辞别用 killed_game 的条数当「清掉了几个」——
+            # 实测 launcher 是收到 WM_CLOSE 后**自己体面退出**的，
+            # killed_game 为空，但确实清干净了。写「终止游戏 0 个」会让人
+            # 以为没生效（同 FAULT #13 的措辞教训）。改报**清掉的数量**。
+            cleared = len(game) - len(left_game)
+            return (status,
+                    {"reason": "unknown-cleanup", "killed": wr.get("killed_game", []),
+                     "skipped": [], "still_alive": [(n, p) for n, p, _ in left_tgt],
+                     "game_alive": len(left_game),
+                     "game_cleared": cleared},
+                    (f"unknown（证据不足）；已按裁定自行收尾，"
+                     f"游戏侧清掉 {cleared}/{len(game)} 个"
+                     + (f"，仍有 {len(left_game)} 个存活" if left_game else "")))
+        else:
+            log(f"  仍有进程存活 目标={[(n, p) for n, p, _ in alive]}"
+                f" 游戏={[(n, p) for n, p, _ in game]} —— 转常规清理路径")
+        # 落到下面的常规清理路径
 
     # --- 超时 / 失败：走清理路径 -------------------------------------------
     reason = args.reason or result or "manual"
