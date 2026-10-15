@@ -76,7 +76,7 @@
 | 动作元素 | **行结构扫描** | **行结构扫描** |
 | 按钮高亮色 | **白**（亮度 > 200） | **青**（B/G > 150 且 R < 130） |
 | 终态判据 | `ww_verdict`（日志**阶段序列**） | `nte_verdict`（**终止标记**） |
-| 目标游戏进程 | `Client-Win64-Shipping.exe` | **`HTGame.exe`**（清理时镜像名 `NTEGame`） |
+| 目标游戏进程 | `Client-Win64-Shipping.exe` | **`HTGame.exe`（本体）+ `NTEGame.exe`（launcher）** |
 | 日志目录 | `ok-ww\data\apps\ok-ww\working\logs\` | `ok-nte\data\apps\ok-nte\working\logs\` |
 | 正常完成 | 自行退出 | 自行退出 |
 | 执行模型 | 每行一个「开始」 | **每行一个「开始」**（v1.4.8 起） |
@@ -84,6 +84,13 @@
 > ⚠️ **游戏进程名的两个口径**：ok-nte 的日志里写 `HTGame.exe`（`nte_verdict.py` 的终止判据用它），
 > 但**清理代码用的是镜像名 `NTEGame`**（`cleanup.py`）。二者指同一个游戏，**清理时必须按 `NTEGame` 匹配**，
 > 否则会漏杀游戏进程。
+>
+> ⚠️ **更正上一条的口径（2026-10-16 实测）**：`HTGame.exe` 与 `NTEGame.exe` **不是同一个进程的两套叫法，
+> 而是两个进程** ——
+> `NTEGame.exe`（`D:\GAMES\Neverness To Everness\NTELauncher\NTEGame.exe`，命令行 `/launcher /directly`）
+> 是 **launcher**，`HTGame.exe`（`...\Client\WindowsNoEditor\HT\Binaries\win64\HTGame.exe`，父进程 = `NTEGame`）
+> 是**游戏本体**。⇒ **要清干净游戏，两个都得杀**（`programs.NTE.game_names = ['HTGame.exe', 'NTEGame.exe']`）。
+> ok-nte 正常完成时**只关游戏本体**，launcher 会残留（FAULT #31/#32），且它带 7~8 个窗口含托盘图标。
 
 **共性**（INV-28）：Tauri 第一层 → `pythonw`/Qt 第二层 → **零子窗口** → 标题需正则 → 尺寸/位置会变。
 **差异**分布在三处：**进程与窗口标识**（exe／窗口类／标题）、**界面布局**（侧栏序号／锚点／按钮色）、
