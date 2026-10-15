@@ -17,6 +17,7 @@ ok-nte 升级后把汇总行从「一行三段」改成「三行独立 `info_set
 """
 
 import sys
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +27,11 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import nte_verdict as V          # noqa: E402
 
 FAILED = []
+
+# 「这个日志真的跑过日常任务」的判据：必须有**执行痕迹**，
+# 而不是文件里出现过 DailyRoutineTask 这个词（配置转储里必然出现）。
+DAILY_RUN = re.compile(
+    r"DailyRoutineTask:(?:开始|info_set|结束)|结束执行日常任务|开始执行日常任务")
 
 
 def check(name, cond, detail=""):
@@ -101,8 +107,17 @@ if V.LOGDIR.is_dir():
         s, f, k = V.parse_summary(t)
         if s is not None or f is not None or k is not None:
             parsed_new += 1
-        elif "DailyRoutineTask" in t:
-            print(f"    [!] {p.name} 含 DailyRoutineTask 但汇总行未解析到")
+        elif DAILY_RUN.search(t):
+            # ⚠️ 判据必须是「真的跑过日常任务」，不是「文件里出现过
+            # DailyRoutineTask 这个词」。该词在**配置转储**里必然出现
+            # （L1 的 onetime_tasks 清单含 'src.tasks.daily.DailyRoutineTask'），
+            # 所以旧写法对每个日志都成立 —— 实测 10-14 那个日志是一整晚的
+            # DSDFarmTask（九百九十九夜），根本没有日常汇总行，
+            # 却被这行告警误导成「格式又变了」。
+            # 这正是 FAULT #18/#20/#27 的同型错误：单看一个信号就下结论。
+            print(f"    [!] {p.name} 跑过日常任务但汇总行未解析到 —— 格式可能又变了")
+        else:
+            print(f"    -  {p.name} 非日常任务运行（无日常任务痕迹），跳过")
     check("至少有一个日志能解析出汇总", parsed_new > 0, f"{parsed_new} 个")
 else:
     print(f"  (跳过：{V.LOGDIR} 不存在)")
