@@ -69,7 +69,7 @@ class Program:
 
     def __init__(self, key, display, exe, root_dir, process_prefix,
                  process_names, loose_title_re, ready_title_re,
-                 min_width, min_height):
+                 min_width, min_height, game_names=None, game_title_re=None):
         self.key = key
         self.display = display
         self.exe = exe
@@ -80,6 +80,11 @@ class Program:
         self.ready_title_re = ready_title_re
         self.min_width = min_width
         self.min_height = min_height
+        # 目标游戏的进程名（用于超时兜底关闭）。**不能**用 exe 路径判定归属
+        # —— 游戏装在 D:\GAMES\ 之类的目录下，与目标程序毫无路径关系。
+        self.game_names = list(game_names or [])
+        # 游戏主窗口标题正则（关窗前定位窗口用；实测两者都可为空标题）
+        self.game_title_re = game_title_re or ""
 
     def owns_process(self, exe_path):
         """该进程是否属于本程序（按工作目录前缀判定）。
@@ -122,6 +127,10 @@ WW = Program(
     ready_title_re=r"(?i)OK-WW\s+v[\d.]+\s+\w+\s+-\s+OK-WW",
     min_width=1000,
     min_height=700,
+    # 目标游戏：鸣潮。实测进程名 Client-Win64-Shipping.exe，
+    # 窗口类 UnrealWindow、标题 '鸣潮  '（含两个尾随空格，实测）。
+    game_names=["Client-Win64-Shipping.exe"],
+    game_title_re=r"(?i)鸣潮|Wuthering\s*Waves",
 )
 
 # --- ok-nte ---------------------------------------------------------------
@@ -157,6 +166,10 @@ NTE = Program(
     ready_title_re=r"(?i)ok-nte\s+v[\d.]+\s+\w+\s+-\s+ok-nte",
     min_width=800,
     min_height=600,
+    # 目标游戏：Neverness To Everness。日志口径写 HTGame.exe（nte_verdict
+    # 用它），清理时镜像名可能显示为 NTEGame —— 两种都列上。
+    game_names=["HTGame.exe", "NTEGame.exe"],
+    game_title_re=r"(?i)Neverness|^HTGame",
 )
 
 

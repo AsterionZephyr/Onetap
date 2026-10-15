@@ -34,9 +34,16 @@ import subprocess
 import sys
 import time
 
+from .. import watchdog
 from . import context
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# 整轮运行的**墙钟**上限（秒）。用户裁定：半小时。
+# 与 step8 的 --total-timeout 不同：这个从**开跑**算起，覆盖全部 8 个节点，
+# 到点由 watchdog 关闭目标程序窗口 + 游戏窗口（必要时杀进程）。
+# 见 watchdog 模块 docstring 关于「为什么 step 内部超时不够」的说明。
+RUN_TIMEOUT = 1800.0
 
 # 链条定义：节点号 -> (模块名, 中文名, 一句说明)
 CHAIN = [
@@ -116,6 +123,18 @@ def build_parser():
                    help="[节点 8] 整条链兜底上限（秒）")
     g.add_argument("--force-clean", action="store_true",
                    help="[节点 9] 忽略结果，强制走清理路径")
+
+    # --- 整轮墙钟上限（用户裁定：半小时）---------------------------------
+    g2 = p.add_argument_group("整轮时间上限")
+    g2.add_argument("--run-timeout", type=float, default=RUN_TIMEOUT,
+                    help=f"整轮运行的墙钟上限（秒），默认 {RUN_TIMEOUT:.0f}"
+                         "（半小时）。到点由 watchdog 关闭目标程序窗口与游戏"
+                         "窗口，必要时杀进程。设 0 则不限制")
+    g2.add_argument("--keep-game", action="store_true",
+                    help="超时收尾时**保留**游戏，只关目标程序"
+                         "（默认按用户裁定：窗口和游戏都关）")
+    g2.add_argument("--no-watchdog", action="store_true",
+                    help="完全停用超时收尾（诊断用；挂住时要自己收拾现场）")
     return p
 
 
@@ -237,10 +256,38 @@ def main(argv=None):
             log(f"  [警告] 前置清理返回 {r.returncode}（继续）")
 
     # --- 逐节执行 -----------------------------------------------------
+    # 整轮墙钟上限（用户裁定：半小时，到点关窗口 + 关游戏）。
+    # 粒度是「节」：每节之间检查一次。若某一节自己挂住，主控会一直等它 ——
+    # 故 step8 的 --total-timeout 由下面推导出**不超过剩余时间**，两者互补。
+    deadline = watchdog.Deadline(args.run_timeout, log=log)
+    deadline.begin()
+    if args.run_timeout > 0 and not args.no_watchdog:
+        log(f"\n[时间上限] 整轮 {args.run_timeout:.0f}s（{args.run_timeout/60:.0f} 分钟）"
+            f"，到点关闭目标程序窗口与游戏")
+    elif args.no_watchdog:
+        log("\n[时间上限] 已停用（--no-watchdog）")
+    watchdog_fired = None
+
     results = []
     for sid in ids:
         mod = dict((c[0], c[1]) for c in CHAIN)[sid]
         name = dict((c[0], c[2]) for c in CHAIN)[sid]
+
+        # --- 到点检查 ---------------------------------------------------
+        if deadline.seconds > 0 and not args.no_watchdog and deadline.expired():
+            log("\n" + "=" * 74)
+            log(f"[主控] 整轮时间上限到了（{deadline.describe()}）—— 执行超时收尾")
+            log("=" * 74)
+            watchdog_fired = watchdog.force_close(
+                prog, reason="run-timeout", log=log,
+                dry_run=args.dry_run, close_game=not args.keep_game)
+            state = context.RunState.load(run_dir, must_exist=False)
+            state.set("watchdog", watchdog_fired)
+            state.set("result", "timeout")
+            state.set("result_detail",
+                      f"整轮超过 {deadline.seconds:.0f}s 上限，已强制收尾")
+            state.save()
+            break
 
         cmd = [args.python, "-m", f"orchestrator.steps.{mod}",
                "--run-dir", run_dir]
@@ -249,8 +296,19 @@ def main(argv=None):
         cmd.extend(step_specific_args(args, sid))
         cmd.extend(args.step_arg)
 
+        # --- 把「剩余时间」传给节点 8，避免它跑过总上限 -------------------
+        # 用户裁定单程序半小时；step8 自己的兜底不能比总上限还长，
+        # 否则总上限只能在节点 8 **返回之后**才生效。
+        if (sid == "8" and args.run_timeout > 0 and not args.no_watchdog
+                and "--total-timeout" not in cmd):
+            remain = deadline.remaining()
+            if remain > 0:
+                cmd.extend(["--total-timeout", f"{remain:.0f}"])
+                log(f"  [时间上限] 节点 8 兜底设为剩余 {remain:.0f}s")
+
         log("\n" + "=" * 74)
         log(f"[主控] 启动节点 {sid} {name}")
+        log(f"  [时间上限] {deadline.describe()}")
         if args.show_cmd:
             log(f"  $ {' '.join(cmd)}")
         log("=" * 74)
@@ -281,7 +339,14 @@ def main(argv=None):
 
     failed = [r for r in results if r[2] != 0]
     log("")
-    if not failed:
+    if watchdog_fired:
+        log(f"⚠ 整轮时间上限先到 —— 已强制收尾："
+            f"关目标窗口 {len(watchdog_fired.get('closed_windows') or [])} 个，"
+            f"关游戏窗口 {len(watchdog_fired.get('closed_game_windows') or [])} 个，"
+            f"杀目标进程 {len(watchdog_fired.get('killed_target') or [])} 个，"
+            f"杀游戏进程 {len(watchdog_fired.get('killed_game') or [])} 个")
+        log(f"  （明细见 state.json 的 watchdog 字段）")
+    elif not failed:
         log("全部节点通过")
     else:
         log(f"{len(failed)} 个节点未通过："
@@ -293,6 +358,8 @@ def main(argv=None):
     log("=" * 74)
 
     log.close()
+    if watchdog_fired:
+        return 3
     if failed:
         return failed[-1][2] or 3
     return 0
