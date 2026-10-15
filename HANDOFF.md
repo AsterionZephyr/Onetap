@@ -394,6 +394,25 @@ for target in 配置的顺序:
 ⚠️ **不要以为 `both` 是并发**：两程序沿用 INV-15 的独占前提，**串行**执行，
 且每轮各自独立计 30 分钟上限（不是共享一个总上限）。
 
+### 9.1 GUI 的目标选择器
+
+控制条上有「目标」下拉框，四项与 `--target` 一一对应：
+
+| 下拉项 | 传参 |
+| --- | --- |
+| 跟随记录（默认） | **不传** `--target` |
+| ok-ww | `--target ww` |
+| ok-nte | `--target nte` |
+| 两个都跑（先 ok-ww 后 ok-nte） | `--target both` |
+
+⚠️ **「跟随记录」必须不传 `--target`**：它配合「接着上次」（`--resume`）续跑，
+此时目标由记录决定。若图省事写成 `args += ["--target", "ww"]`，
+**续跑 ok-nte 会被悄悄改回 ok-ww** —— 又一个静默失效。
+映射表在 `gui/app.py` 的 `TARGET_CHOICES` / `TARGET_ARG`。
+
+验证靠 `probe/_probe_gui_target_wire.py`（用 Tk 的 API 直接调**真实的 `on_run`**，
+把 `Runner` stub 掉看拼出的 argv）—— **不要靠人肉点击复核**，原因见 §10.7。
+
 ---
 
 ## 10. 工作方式建议（血泪教训）
@@ -405,6 +424,15 @@ for target in 配置的顺序:
 5. **抓图必须落盘供肉眼复核。** 只靠数字（分数、亮度）会漏掉「抓到的是别的窗口」这类问题。
 6. **新目标的适配流程**（ok-nte 用的就是这套）：
    ① 启动并勘察进程/窗口结构 → ② 抓整窗肉眼确认 → ③ 用模板试匹配 → ④ **逐页扫描**找模板在哪页 → ⑤ **验证唯一性** → ⑥ 必要时新采锚点 → ⑦ 端到端 dry-run → ⑧ 实跑。
+7. **Tk 窗口在远程会话下收不到合成点击 —— 别再用点击复核 GUI。**
+   实测（2026-10-16，GameViewer 在运行）：`desktop_click` 报告「落点与目标一致」
+   （光标读数也确实到了目标像素），但 `ttk.Button` 与 `ttk.Combobox` **毫无反应** ——
+   下拉框不展开、点「运行编排」日志仍空白、按钮不变灰。
+   `desktop_diagnose` 却报「落点稳定，鼠标点击可用」，**这个诊断不足以证明点击有效**。
+   ⇒ 复核 GUI 行为要走**程序化路径**：
+   - 界面逻辑：用 Tk 自己的 API 直接调回调（见 `probe/_probe_gui_target_wire.py`）；
+   - 视觉：`desktop_capture` **抓图**仍然有效（抓图与输入是两条通道），
+     配合 `docs/_probe_gui2_visual.py` 等自检。
 
 ---
 
@@ -414,6 +442,7 @@ for target in 配置的顺序:
 | --- | --- |
 | `probe/capture.py` | 窗口发现、抓帧、帧统计、PNG 落盘 |
 | `probe/template_probe.py` | `match_template`（归一化互相关）、`capture_okww` |
+| **`probe/_probe_gui_target_wire.py`** | **GUI 目标选择器接线验证**（调真实 `on_run`，stub `Runner` 看 argv） |
 | **`legacy/probe-investigation/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
 | **`legacy/probe-investigation/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
 | **`probe/nte_main.py`** | `all_hits` **唯一性检查工具**（被多个脚本复用） |
