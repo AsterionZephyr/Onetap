@@ -63,6 +63,10 @@
 | `2_nte.png` | 81×32 | 「▶ 开始」按钮 | ⚠️ **跨页不唯一**（见 §4.2） |
 | **`3_nte_daily.png`** | **73×25** | **「日常任务」文字（页面锚点）** | ✅ **1.0000，唯一** |
 
+> ⚠️ 本节是 **v1.4.7 时期**的实测记录。`1_nte.png` 与 `2_nte.png` 均已弃用
+> （`2_nte.png` 已移入 [`legacy/assets/`](./legacy/assets/)）；v1.4.8 起改用行结构扫描，
+> 现行资产见 `templates/assets.json` 与 [README-ORCHESTRATOR.md](./README-ORCHESTRATOR.md) §6。
+
 ### 3.1 侧栏图标位置（导航用）
 
 侧栏图标簇实测（窗口内 y）：`129, 180, 229, 279, 329, 379, 424/434, 474/485, 529, 579, 629`，底部另有 `939, 990`。
@@ -283,14 +287,18 @@ ok-nte 的**「关于」页**上，`3_nte_daily`（「日常任务」文字）�
 
 | 脚本 | 作用 |
 | --- | --- |
-| `probe/nte_launch.py` | 启动 + 勘察（进程/窗口/两层结构） |
+| `legacy/probe-investigation/nte_launch.py` | 启动 + 勘察（进程/窗口/两层结构） |
 | `probe/nte_main.py` | 主界面勘察 + `all_hits` 唯一性检查工具 |
-| `probe/nte_sweep.py` | **逐页扫描**（找模板在哪一页，通用手段） |
-| `probe/nte_anchor.py` | 采集页面文字锚点 + 唯一性验证 |
-| `probe/nte_reanchor.py` | **程序化采集 ☰ 身份锚点**（特征检测，非手工裁剪） |
+| `legacy/probe-investigation/nte_sweep.py` | **逐页扫描**（找模板在哪一页，通用手段） |
+| `legacy/probe-investigation/nte_anchor.py` | 采集页面文字锚点 + 唯一性验证 |
+| `legacy/probe-investigation/nte_reanchor.py` | **程序化采集 ☰ 身份锚点**（特征检测，非手工裁剪） |
 | `probe/nte_verdict.py` | **ok-nte 终态判据**（终止标记 + 逐项结果） |
-| `probe/nte_run.py` | 独立端到端参考实现 |
-| `probe/nte_watch.py` | 状态观测 |
+| `legacy/probe-investigation/nte_run.py` | 独立端到端参考实现 |
+| `legacy/probe-investigation/nte_watch.py` | 状态观测 |
+
+> 带 `legacy/probe-investigation/` 前缀的是开发期一次性调查工具，已移入 `legacy/`
+> （依据 [README-ORCHESTRATOR.md](./README-ORCHESTRATOR.md) §7）；`probe/nte_main.py`
+> 与 `probe/nte_verdict.py` 是核心模块，仍在原位。
 
 ---
 

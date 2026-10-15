@@ -72,7 +72,7 @@ cd E:\TOOLS\ScriptsGames\Onetap\probe
 
 ### 结果文件
 
-每次运行写一份 JSON 到 `probe/orch/orch-YYYYMMDD-HHMMSS.json`。
+每次运行写一份 JSON 到 `legacy/probe-investigation/orch-runs/orch-YYYYMMDD-HHMMSS.json`（**旧版编排器的记录，已移入 `legacy/`**；当前链条改用运行目录 + `state.json`）。
 
 ---
 
@@ -157,7 +157,9 @@ ok-nte:  E:\TOOLS\ScriptsGames\ok-nte\data\apps\ok-nte\working\logs\ok-script.lo
 | `1_ww.png` | 27×31 | 侧栏图标（**已不用于身份**） | ok-ww | — |
 | `3_nte_daily.png` | 155×35 | **页面锚点**（首行「异象界域」） | ok-nte | v1.4.8 |
 | `4_nte_menu.png` | 26×20 | 身份锚点（☰）**回退用** | ok-nte | v1.4.8 |
-| `2_nte.png` | 103×46 | 旧版动作元素（**v1.4.8 起已弃用**） | ok-nte | v1.4.7 |
+| `2_nte.png` | 103×46 | 旧版动作元素（**v1.4.8 起已弃用**，已移入 [`legacy/assets/`](./legacy/assets/)） | ok-nte | v1.4.7 |
+
+> `templates/` 现只剩 6 张在用资产。已弃用的 `2_nte.png` 见 [legacy/assets/](./legacy/assets/)。
 
 ⚠️ **身份锚点实际不用模板**：编排主用**程序化检测 ☰**（见 §9.3），
 `3_ww_menu.png` / `4_nte_menu.png` 仅作回退。

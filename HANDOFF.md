@@ -47,7 +47,7 @@
 
 **抓图**：`ctypes` + `BitBlt`（见 `probe/capture.py`）。
 **匹配**：numpy 归一化互相关（见 `probe/template_probe.py` 的 `match_template`）。
-**输入**：`SetCursorPos` + `SendInput`（见 `probe/run_daily2.py`）。
+**输入**：`SetCursorPos` + `SendInput`（参考实现见 `legacy/probe-investigation/run_daily2.py`）。
 
 ---
 
@@ -352,13 +352,17 @@ for target in 配置的顺序:
 | --- | --- |
 | `probe/capture.py` | 窗口发现、抓帧、帧统计、PNG 落盘 |
 | `probe/template_probe.py` | `match_template`（归一化互相关）、`capture_okww` |
-| **`probe/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
-| **`probe/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
+| **`legacy/probe-investigation/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
+| **`legacy/probe-investigation/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
 | **`probe/nte_main.py`** | `all_hits` **唯一性检查工具**（被多个脚本复用） |
-| `probe/nte_sweep.py` | **逐页扫描**：查找模板在哪一页（通用手段） |
-| `probe/nte_anchor.py` | 采集页面文字锚点 + 唯一性验证 |
-| `probe/check_anchor_collision.py` / `anchor_ambiguity.py` | 锚点歧义诊断 |
-| `probe/verify_negative.py` | 负向对照实验 |
-| `probe/observe_v2.py` | 带身份校验的观测循环 |
-| `probe/watch_autoclose.py` / `nte_watch.py` | 自动关闭 / 状态观测 |
+| `legacy/probe-investigation/nte_sweep.py` | **逐页扫描**：查找模板在哪一页（通用手段） |
+| `legacy/probe-investigation/nte_anchor.py` | 采集页面文字锚点 + 唯一性验证 |
+| `legacy/probe-investigation/check_anchor_collision.py` / `anchor_ambiguity.py` | 锚点歧义诊断 |
+| `legacy/probe-investigation/verify_negative.py` | 负向对照实验 |
+| `legacy/probe-investigation/observe_v2.py` | 带身份校验的观测循环 |
+| `legacy/probe-investigation/watch_autoclose.py` / `nte_watch.py` | 自动关闭 / 状态观测 |
+
+> ⚠️ **表中带 `legacy/probe-investigation/` 前缀的是开发期一次性调查工具**，已移入 `legacy/`
+> （依据 [README-ORCHESTRATOR.md](./README-ORCHESTRATOR.md) §7）。保留作**证据追溯**，
+> 不参与生产流程。核心模块（`capture.py`、`template_probe.py`、`nte_main.py`）仍在 `probe/`。
 

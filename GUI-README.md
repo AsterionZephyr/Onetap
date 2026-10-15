@@ -244,7 +244,7 @@ docs/
 
 ## 9. 与旧骨架的关系
 
-[orchestrator/gui.py](./orchestrator/gui.py) 是**上一版的单页骨架**，它
+[legacy/code-old-gui-skeleton/gui.py](./legacy/code-old-gui-skeleton/gui.py) 是**上一版的单页骨架**（已移入 `legacy/`，见 [legacy/README.md](./legacy/README.md)），它
 同进程开线程驱动旧的 `Orchestrator.run()`，**没有代码编辑**。
 
 本 GUI 取代它：改成**子进程**驱动 `steps/main.py`、两页、可编辑。

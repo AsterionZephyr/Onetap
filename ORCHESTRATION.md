@@ -10,8 +10,8 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `probe/targets.py` | **程序配置**（唯一"因程序而异"之处） |
-| `probe/orchestrator.py` | **编排主流程**（串行、带校验、如实报告） |
+| `legacy/code-old-orchestrator/targets.py` | **程序配置**（唯一"因程序而异"之处）。⚠️ **旧版，已移入 `legacy/`** |
+| `legacy/code-old-orchestrator/orchestrator.py` | **编排主流程**（串行、带校验、如实报告）。⚠️ **旧版，已移入 `legacy/`** |
 | `probe/ww_action.py` | ok-ww 动作元素定位（行结构扫描） |
 
 **设计原则**：差异全部落在 `targets.py` 配置里；`window` / `capture` / `match` / `input` 逻辑两程序共用（INV-28）。

@@ -291,13 +291,15 @@ cd E:\TOOLS\ScriptsGames\Onetap
 
 | 目录 | 状态 |
 | --- | --- |
-| `probe/orchestrator.py` + `probe/targets.py` 等 | **旧版**（README §3 的 `--pre-clean` / `--only` 那套）。最近一次实跑判 `SUCCESS`（107s）。**未改动** |
+| [`legacy/code-old-orchestrator/`](./legacy/code-old-orchestrator/)（原 `probe/orchestrator.py` + `probe/targets.py`） | **旧版**（README §3 的 `--pre-clean` / `--only` 那套）。最近一次实跑判 `SUCCESS`（107s）。**已移入 `legacy/`**，见 [legacy/README.md](./legacy/README.md) |
 | `orchestrator/` 包 | 重构版（九节点、`node1..node9` 命名）。**未改动** |
 | `orchestrator/steps/` | **本链**：把上一个包的 `run()` 链条按节点拆开 |
 | [`gui/`](./gui/) | **新增**：套在本链外面的两页 GUI（跑 / 改代码）。见 [GUI-README.md](./GUI-README.md) |
 
-⚠️ 旧的 `orchestrator.py` 里的 `Orchestrator.run()` **仍然可用**，
-三套并存、互不影响。拆分与 GUI **没有删除任何原有代码**。
+⚠️ 旧的 `Orchestrator.run()` 代码**完整保留在 `legacy/code-old-orchestrator/`**，
+但**已不在 import 路径上**（`probe/` 下不再有这两个文件），需按
+[legacy/README.md](./legacy/README.md) 的说明移回原位才能运行。
+拆分与 GUI **没有删除任何原有代码**。
 
 ### 8.1 GUI 与节点代码的关系
 
