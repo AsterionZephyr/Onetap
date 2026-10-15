@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 
+from .. import programs
 from .. import watchdog
 from . import context
 
@@ -104,8 +105,9 @@ def build_parser():
     # --- 目标程序 ---------------------------------------------------------
     # ⚠️ 默认 **None**（不是 "ww"）：省略时跟随 state.json 里的记录，
     # 这样 `--resume` 续跑不会把 ok-nte 的运行悄悄改回 ok-ww。
-    p.add_argument("--target", default=None, choices=["ww", "nte"],
-                   help="目标程序：ww=ok-ww（默认）/ nte=ok-nte。"
+    p.add_argument("--target", default=None, choices=["ww", "nte", "both"],
+                   help="目标程序：ww=ok-ww（默认）/ nte=ok-nte / "
+                        "both=**先 ok-ww 再 ok-nte 串起来跑**。"
                         "开跑时写入 state.json，全链共享")
 
     # --- 透传给特定节点的参数（见 PASSTHROUGH）-----------------------------
@@ -190,71 +192,15 @@ def print_chain(args):
     print("  （无节点 3：实机复核证明「跨过第一层」不存在）")
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+def run_one(args, log, prog, run_dir, ids):
+    """跑**一个**程序的完整链条。
 
-    if args.list:
-        print_chain(args)
-        return 0
+    返回 (results, watchdog_fired)。`both` 模式会对 ok-ww 与 ok-nte 各调一次。
 
-    ids = selected_steps(args)
-
-    # --- 运行目录 -----------------------------------------------------
-    if args.run_dir and not args.resume:
-        run_dir = os.path.abspath(args.run_dir)
-    elif args.resume:
-        run_dir = context.resolve_run_dir(args, create=False)
-    else:
-        run_dir = context.new_run_dir()
-
-    os.makedirs(run_dir, exist_ok=True)
-    log = context.Log(os.path.join(run_dir, "chain.log"))
-
-    # --- 目标程序：写入 state.json，**全链共享** -------------------------
-    # 放在开跑之初（而不是每节命令行）：每节都是独立子进程，
-    # state.json 是它们唯一的共享通道；写一次，8 个节点都读得到。
-    state = context.RunState.load(run_dir, must_exist=False)
-    prog = context.resolve_program(state, args, log=log)
-    if args.target:
-        # 显式 --target 覆盖 state.json（允许改指另一个程序重跑）
-        last = state.get("program")
-        if last and last != prog.key:
-            log(f"[目标程序] 由 {last} 改为 {prog.key}（--target 覆盖）")
-        state.set("program", prog.key)
-        state.save()
-    elif not state.get("program"):
-        state.set("program", prog.key)
-        state.save()
-
-    log("=" * 74)
-    log("断点式编排主控")
-    log(f"运行目录 {run_dir}")
-    log(f"目标程序 {prog.display}（{prog.key}）")
-    log(f"节点序列 {ids}   dry_run={args.dry_run}")
-    log(f"解释器   {args.python}")
-    log("=" * 74)
-    log("\n链条：")
-    for sid, mod, name, why in CHAIN:
-        mark = ">>" if sid in ids else "  "
-        log(f" {mark} [{sid}] {name:14s} {why}")
-
-    if args.dry_run:
-        state.set("dry_run", True)
-        state.save()
-
-    # --- 前置清理 -----------------------------------------------------
-    if args.pre_clean:
-        # ⚠️ 清理必须针对**本次的目标程序**：清理 ok-ww 却跑 ok-nte 会
-        # 把没在用的那个程序的残留当成本次前提，且真正该清的没清。
-        log(f"\n[前置清理] 独占式前提：清掉 {prog.display} 残留进程")
-        cmd = [args.python, "-m", "orchestrator.steps.step9_cleanup",
-               "--run-dir", run_dir, "--force"]
-        if args.dry_run:
-            cmd.append("--dry-run")
-        r = subprocess.run(cmd, cwd=context.ROOT)
-        if r.returncode != 0:
-            log(f"  [警告] 前置清理返回 {r.returncode}（继续）")
-
+    ⚠️ 抽成函数的原因：`--target both` 要求两个程序**先后各跑一遍完整链条**，
+    而不是把两个程序的节点混在一条链里 —— 它们的节点序列不同、
+    state.json 里的 program 只能存一个值。抽出来才能干净地跑两轮。
+    """
     # --- 逐节执行 -----------------------------------------------------
     # 整轮墙钟上限（用户裁定：半小时，到点关窗口 + 关游戏）。
     # 粒度是「节」：每节之间检查一次。若某一节自己挂住，主控会一直等它 ——
@@ -329,6 +275,140 @@ def main(argv=None):
             if not args.keep_going:
                 break
             log("  [--keep-going] 按参数继续下一节")
+
+    return results, watchdog_fired
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+
+    if args.list:
+        print_chain(args)
+        return 0
+
+    ids = selected_steps(args)
+
+    # --- `--target both`：两程序**先后各跑一轮** --------------------------
+    # ⚠️ 必须在**一个**运行目录下分两轮，且第二轮要接着用 state.json ——
+    # 但 state.json 的 program 只能存一个值，所以第二轮靠子进程重新指定。
+    # 这里不递归调用 main()（会重新算 run_dir、重新写日志头），
+    # 而是显式做两遍：每遍算出自己的 prog 与 run_dir，串行跑。
+    if args.target == "both":
+        return run_both(args)
+
+    return run_single(args, ids)
+
+
+def run_both(args):
+    """ok-ww 跑完再跑 ok-nte。任一程序失败不影响另一个继续（用户裁定可无人值守）。"""
+    order = ["ww", "nte"]
+    root_run_dir = (os.path.abspath(args.run_dir) if args.run_dir and not args.resume
+                    else context.new_run_dir())
+    os.makedirs(root_run_dir, exist_ok=True)
+    log = context.Log(os.path.join(root_run_dir, "chain.log"))
+    log("=" * 74)
+    log("串联运行：ok-ww → ok-nte")
+    log(f"运行目录 {root_run_dir}")
+    log("=" * 74)
+    log("每个程序各跑一遍完整链条，各自独立计时（各 30 分钟上限），"
+        "互不影响：一个失败也会继续跑下一个。")
+
+    overall = []
+    for key in order:
+        # 每轮一个子目录，避免两轮的节点日志互相覆盖 —— 否则事后分不清
+        # step8.log 是哪个程序的（两轮的节点号完全相同）。
+        sub_dir = os.path.join(root_run_dir, key)
+        os.makedirs(sub_dir, exist_ok=True)
+        sub = argparse.Namespace(**vars(args))
+        sub.target = key
+        sub.run_dir = sub_dir
+        sub.resume = False           # 新目录，不能沿用 --resume 的定位
+        prog = programs.get(key)
+        log("\n" + "#" * 74)
+        log(f"# 串联第 {'1' if key == 'ww' else '2'} 轮：{prog.display}（{key}）")
+        log(f"# 运行目录 {sub_dir}")
+        log("#" * 74)
+        t0 = time.time()
+        rc = run_single(sub, selected_steps(sub))
+        dt = time.time() - t0
+        overall.append((key, prog.display, rc, dt))
+        log(f"\n[串联] {prog.display} 结束，退出码 {rc}，用时 {dt:.0f}s")
+
+    log("\n" + "=" * 74)
+    log("串联汇总")
+    log("=" * 74)
+    for key, disp, rc, dt in overall:
+        log(f"  {disp:8s} 退出码 {rc}  {dt/60:.1f} 分钟  "
+            f"{'通过' if rc == 0 else '未通过'}")
+    log(f"运行目录 {root_run_dir}")
+    log("=" * 74)
+    log.close()
+    bad = [o for o in overall if o[2] != 0]
+    if len(bad) == len(overall):
+        return 3
+    if bad:
+        return bad[-1][2] or 3
+    return 0
+
+
+def run_single(args, ids):
+    # --- 运行目录 -----------------------------------------------------
+    if args.run_dir and not args.resume:
+        run_dir = os.path.abspath(args.run_dir)
+    elif args.resume:
+        run_dir = context.resolve_run_dir(args, create=False)
+    else:
+        run_dir = context.new_run_dir()
+
+    os.makedirs(run_dir, exist_ok=True)
+    log = context.Log(os.path.join(run_dir, "chain.log"))
+
+    # --- 目标程序：写入 state.json，**全链共享** -------------------------
+    # 放在开跑之初（而不是每节命令行）：每节都是独立子进程，
+    # state.json 是它们唯一的共享通道；写一次，8 个节点都读得到。
+    state = context.RunState.load(run_dir, must_exist=False)
+    prog = context.resolve_program(state, args, log=log)
+    if args.target:
+        # 显式 --target 覆盖 state.json（允许改指另一个程序重跑）
+        last = state.get("program")
+        if last and last != prog.key:
+            log(f"[目标程序] 由 {last} 改为 {prog.key}（--target 覆盖）")
+        state.set("program", prog.key)
+        state.save()
+    elif not state.get("program"):
+        state.set("program", prog.key)
+        state.save()
+
+    log("=" * 74)
+    log("断点式编排主控")
+    log(f"运行目录 {run_dir}")
+    log(f"目标程序 {prog.display}（{prog.key}）")
+    log(f"节点序列 {ids}   dry_run={args.dry_run}")
+    log(f"解释器   {args.python}")
+    log("=" * 74)
+    log("\n链条：")
+    for sid, mod, name, why in CHAIN:
+        mark = ">>" if sid in ids else "  "
+        log(f" {mark} [{sid}] {name:14s} {why}")
+
+    if args.dry_run:
+        state.set("dry_run", True)
+        state.save()
+
+    # --- 前置清理 -----------------------------------------------------
+    if args.pre_clean:
+        # ⚠️ 清理必须针对**本次的目标程序**：清理 ok-ww 却跑 ok-nte 会
+        # 把没在用的那个程序的残留当成本次前提，且真正该清的没清。
+        log(f"\n[前置清理] 独占式前提：清掉 {prog.display} 残留进程")
+        cmd = [args.python, "-m", "orchestrator.steps.step9_cleanup",
+               "--run-dir", run_dir, "--force"]
+        if args.dry_run:
+            cmd.append("--dry-run")
+        r = subprocess.run(cmd, cwd=context.ROOT)
+        if r.returncode != 0:
+            log(f"  [警告] 前置清理返回 {r.returncode}（继续）")
+
+    results, watchdog_fired = run_one(args, log, prog, run_dir, ids)
 
     # --- 汇总 ---------------------------------------------------------
     state = context.RunState.load(run_dir, must_exist=False)
