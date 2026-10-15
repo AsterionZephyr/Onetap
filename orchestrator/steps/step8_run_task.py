@@ -165,6 +165,106 @@ def navigate_to_tasks(state, frame, registry, args, log):
         f"点击落空、或当前不在可导航的页面。")
 
 
+def nte_navigate_to_daily(state, frame, args, log):
+    """ok-nte 导航：确认/进入「日常任务」页。返回 (frame, navigated)。
+
+    ⚠️ 与 ok-ww 的差别（FAULT #22）：
+
+      1. **目标页是「日常任务」，不是「任务」**。ok-nte 侧栏里有**两组**菜单，
+         两组都含「任务」字样（上组 ▤「任务」＋下组「任务」/「日常任务」），
+         按名字子串定位必然歧义 ⇒ **只能按序号**。
+      2. 实测侧栏为 11 项等距列表（40.0px），**「日常任务」是第 4 项**。
+         该序号**不是**文档里写的 3（文档基于旧版布局）。
+      3. 页面判据不靠序号自证：点击后用 `nte_locate_start` **重新抓帧闭环验证**
+         （复选框 + 右下角开始按钮两个独立特征），序号只用来找点击位置。
+    """
+    log("\n[8a] 导航：确认当前在「日常任务」页（ok-nte）")
+
+    for attempt in range(1, NAV_RETRIES + 1):
+        try:
+            match.nte_locate_start(frame.rgb, log=(log if attempt == 1 else None))
+            if attempt > 1:
+                log(f"  [OK] 第 {attempt} 次抓帧确认：已在日常任务页")
+            else:
+                log("  [OK] 已在日常任务页（复选框 + 开始按钮双特征成立）")
+            return frame, attempt > 1
+        except GuardFailure as e:
+            log(f"  第 {attempt} 次判定：当前不是日常任务页 —— "
+                f"{e.detail.splitlines()[0]}")
+
+        if attempt >= NAV_RETRIES:
+            break
+
+        if args.offline or args.dry_run:
+            log("  [离线/DRY RUN] 不点击导航；直接进入定位环节以检验判据")
+            return frame, False
+
+        item = match.find_sidebar_item(frame.rgb, match.NTE_SIDEBAR_ITEM_DAILY,
+                                       log=log)
+        if item is None:
+            raise GuardFailure(
+                "INV-24",
+                f"无法程序化定位 ok-nte 侧栏第 "
+                f"{match.NTE_SIDEBAR_ITEM_DAILY} 项（日常任务）。\n"
+                "  => 可能原因：侧栏未展开、界面改版、窗口过矮。")
+
+        hwnd = state.get("hwnd")
+        if not hwnd:
+            raise GuardFailure("INV-23", "导航需要窗口句柄（离线模式请加 --only-locate）")
+        cx, cy = item["pos"]
+        sp = win32.client_to_screen(hwnd, cx, cy)
+        if sp is None:
+            raise GuardFailure("INV-23", "ClientToScreen 失败")
+        log(f"  侧栏第 {match.NTE_SIDEBAR_ITEM_DAILY} 项"
+            f"（共 {item['n_items']} 项，行距 {item['pitch']}px）"
+            f"窗口内点=({cx},{cy}) -> 屏幕 ({sp[0]},{sp[1]})")
+        input_mod.guarded_click(hwnd, sp[0], sp[1], dry_run=False, log=log)
+        time.sleep(1.5)
+        _, frame = grab(state, strict=True, log=log)
+        shot(state, frame, f"nte-nav-attempt{attempt}", log)
+
+    raise GuardFailure(
+        "INV-24",
+        f"ok-nte 导航 {NAV_RETRIES} 次后仍未进入日常任务页。\n"
+        f"  => 可能原因：界面改版、点击落空、或当前不在可导航的页面。")
+
+
+def nte_locate_start_button(state, frame, log, offline=False):
+    """ok-nte 定位「开始」按钮并换算屏幕坐标。
+
+    返回 (screen_coords, loc)。
+    """
+    log("\n[8b] 定位任务页与「开始」按钮（ok-nte）")
+    loc = match.nte_locate_start(frame.rgb, log=log)
+    btn = loc["button"]
+    bx0, by0, bx1, by1 = btn["box"]
+    cx, cy = btn["center"]
+    log(f"  已勾选任务 {loc['n_checked']} 项；行中心 = "
+        f"{[round(b['cy']) for b in loc['boxes']]}")
+    log(f"  开始按钮 窗口内 x={bx0}..{bx1} y={by0}..{by1} 中心=({cx},{cy})")
+
+    h, w = frame.rgb.shape[:2]
+    if not (cx > w * 0.5 and cy > h * 0.8):
+        raise GuardFailure(
+            "INV-19",
+            f"交叉验证失败：ok-nte 的「开始」应在右下角，"
+            f"实测中心 ({cx},{cy}) 不在右下象限（帧 {w}x{h}）")
+
+    # ⚠️ 离线判定要看 offline 形参，**不能只看 hwnd 是否存在**：
+    # --offline 时 state 里可能残留上一次运行的 hwnd，对它调 ClientToScreen
+    # 会失败并报 INV-23，把「离线定位其实已经成功」伪装成失败（实测踩过）。
+    hwnd = None if offline else state.get("hwnd")
+    if hwnd:
+        sp = win32.client_to_screen(hwnd, cx, cy)
+        if sp is None:
+            raise GuardFailure("INV-23", "ClientToScreen 失败")
+        log(f"  屏幕坐标 = ({sp[0]},{sp[1]})")
+    else:
+        sp = (cx, cy)
+        log(f"  [离线] 无窗口，窗口内坐标 = ({cx},{cy})")
+    return sp, loc
+
+
 # ------------------------------------------------------------ 8b 定位
 
 
@@ -220,16 +320,22 @@ def locate_and_click_start(state, frame, registry, log):
 # ------------------------------------------------- 8c/8d 点击 + 验证
 
 
-def click_and_confirm(state, frame, registry, args, log):
+def click_and_confirm(state, frame, registry, args, log, prog=None):
     """点击「开始」并验证生效；无变化则**重试整轮**（Q8：N=3）。
 
     重试时重新置前台、重新定位、重新点击 —— 因为 ok-ww 会自己移动鼠标
     （MouseResetTask，日志 125 处 `move mouse back`），点击后若依赖光标位置需重新确认。
+
+    prog 给定时按目标程序分派导航/定位（ok-nte 的任务页结构与 ok-ww 不同构）。
     """
     for attempt in range(1, CLICK_RETRIES + 1):
         log(f"\n[8c] 点击 第 {attempt}/{CLICK_RETRIES} 轮")
-        frame, _ = navigate_to_tasks(state, frame, registry, args, log)
-        sp, _y0, _y1, _loc = locate_and_click_start(state, frame, registry, log)
+        if prog is not None and prog.key == "nte":
+            frame, _ = nte_navigate_to_daily(state, frame, args, log)
+            sp, _loc = nte_locate_start_button(state, frame, log, offline=args.offline)
+        else:
+            frame, _ = navigate_to_tasks(state, frame, registry, args, log)
+            sp, _y0, _y1, _loc = locate_and_click_start(state, frame, registry, log)
         shot(state, frame, "about-to-click", log)
 
         before = frame.rgb.astype("int16")
@@ -461,15 +567,33 @@ def body(args, state, log):
         shot(state, f, "task-loop-start", log)
 
     # --- 8a + 8b（--only-locate 到此为止）---------------------------------
+    # ⚠️ 两个程序的任务页**不同构**，定位链必须分派（FAULT #22）：
+    #   ok-ww  -> 单行「每日任务」+ 行内扫描最右亮像素 = 开始按钮
+    #   ok-nte -> 多行复选列表 + 右下角唯一「开始」按钮
     if args.only_locate:
         try:
-            f, _nav = navigate_to_tasks(state, f, registry, args, log)
-            sp, y0, y1, loc = locate_and_click_start(state, f, registry, log)
+            if prog.key == "nte":
+                f, _nav = nte_navigate_to_daily(state, f, args, log)
+                sp, loc = nte_locate_start_button(state, f, log, offline=args.offline)
+                y0 = y1 = 0
+            else:
+                f, _nav = navigate_to_tasks(state, f, registry, args, log)
+                sp, y0, y1, loc = locate_and_click_start(state, f, registry, log)
         except GuardFailure as e:
             log(f"\n  [!!] [{e.invariant}] {e.detail}")
             return "failed", {"invariant": e.invariant}, \
                 f"{e.invariant}：{e.detail.splitlines()[0]}"
         shot(state, f, "located", log)
+        if prog.key == "nte":
+            return ("ok",
+                    {"mode": "only-locate", "program": prog.key,
+                     "screen_coords": list(sp),
+                     "n_checked": loc["n_checked"],
+                     "boxes": [round(b["cy"], 1) for b in loc["boxes"]],
+                     "button_center": list(loc["button"]["center"]),
+                     "offline": bool(args.adopt_frame)},
+                    f"定位成功（ok-nte）已勾选 {loc['n_checked']} 项 "
+                    f"按钮窗口内 {tuple(loc['button']['center'])}")
         return ("ok",
                 {"mode": "only-locate", "screen_coords": list(sp),
                  "row_y0": y0, "row_y1": y1,
@@ -481,7 +605,7 @@ def body(args, state, log):
 
     # --- 8c + 8d ---------------------------------------------------------
     try:
-        ok, f = click_and_confirm(state, f, registry, args, log)
+        ok, f = click_and_confirm(state, f, registry, args, log, prog=prog)
     except GuardFailure as e:
         log(f"\n  [!!] [{e.invariant}] {e.detail}")
         return "failed", {"invariant": e.invariant}, \

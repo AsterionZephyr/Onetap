@@ -614,3 +614,239 @@ def locate_daily_row(frame_rgb, row_tpl):
         "row_y1": y + ah,
         "button": btn,
     }
+
+
+# ==========================================================================
+# ok-nte（v1.4.14）—— 任务页结构与 ok-ww **不同构**，见 FAULT #22
+# ==========================================================================
+#
+# ⚠️ 文档（FRAMEWORK §0.1.2 / HANDOFF）曾断言 ok-nte「v1.4.8 起与 ok-ww 同构：
+# 逐任务行、每行一个开始按钮、9 个同款按钮」。**v1.4.14 实测推翻了这个前提**：
+#
+#     每行 = 「复选框 + 任务名 + 展开箭头」，**没有逐行按钮**；
+#     全页只有 **1 个「开始」**，在右下角。
+#
+# 也就是说 ok-nte 又回到了文档所说的「已被淘汰」的旧模型。
+# ⇒ **ok-ww 的行扫描定位（locate_daily_row / scan_row_button）不适用于 ok-nte。**
+# 下面是一套按 ok-nte 真实结构写的独立定位器。
+
+# --- ok-nte 几何常量（1500x1000 实测；**只用结构性比例，不用绝对像素**）------
+NTE_CHECK_X0, NTE_CHECK_X1 = 150, 260   # 复选框所在 x 带（窗口内坐标）
+NTE_CHECK_SIZE = 20                      # 复选框边长（实测恒 20x20）
+NTE_ROW_PITCH = 62                       # 行距（实测恒 62.0px @1500x1000）
+NTE_BOTTOM_FRAC = 0.90                   # 底部栏起始（y > h*0.90 视为底部栏）
+NTE_START_MIN_W = 50                     # 「开始」按钮最小宽度（实测 78）
+NTE_CHECK_MIN_PIX = 8                    # 判为复选框的最少青色像素
+# 侧栏「当前选中」青色竖条所在 x 带（实测 x≈2..5）
+NTE_HL_X0, NTE_HL_X1 = 0, 12
+# ok-nte 侧栏「日常任务」的**内容簇序号**（0-based）。
+# ⚠️ 实测 1500x1000 下侧栏是 11 项等距列表（40.0px），日常任务为第 4 项。
+#    文档 FRAMEWORK §0.1.2 记的是 index 3 —— 那是旧版布局，**已过期**。
+#    实测交叉验证：青色选中竖条落在 y=263.5，与 idx=4 的 y=263 **一致**。
+NTE_SIDEBAR_ITEM_DAILY = 4
+# ⚠️ 尺寸闸门：实测真复选框恒 20x20。若不给上限，**整帧纯青**也会被当做一个
+# 横贯全宽的巨块，从而骗过 nte_locate_start（探针实测复现）。上限给得宽松
+# （2x），以容忍不同 DPI，但仍足以拒绝全屏色块。
+NTE_CHECK_MAX_W = NTE_CHECK_SIZE * 2 + 4
+NTE_CHECK_MAX_H = NTE_CHECK_SIZE * 2 + 4
+
+# 勾选态颜色（FRAMEWORK §0.1.2）：青 —— B/G>150 且 R<130
+NTE_CYAN_R_MAX = 130
+NTE_CYAN_GB_MIN = 150
+
+
+def nte_cyan_mask(frame_rgb):
+    """ok-nte 的「青色」掩码（勾选态复选框 / 开始按钮 都是这个色）。
+
+    ⚠️ ok-ww 的按钮高亮色是**白**（亮度>200），ok-nte 是**青**。
+    两个程序**不可共用一个色判据**（FRAMEWORK §0.1.2）。
+    """
+    f = frame_rgb.astype("int16")
+    r, g, b = f[:, :, 0], f[:, :, 1], f[:, :, 2]
+    return (g > NTE_CYAN_GB_MIN) & (b > NTE_CYAN_GB_MIN) & (r < NTE_CYAN_R_MAX)
+
+
+def _runs(mask_1d, offset=0, minlen=1):
+    out, y, n = [], 0, len(mask_1d)
+    while y < n:
+        if mask_1d[y]:
+            y0 = y
+            while y < n and mask_1d[y]:
+                y += 1
+            if y - y0 >= minlen:
+                out.append((y0 + offset, y - 1 + offset))
+        else:
+            y += 1
+    return out
+
+
+def nte_find_sidebar_highlight(frame_rgb, log=None):
+    """定位 ok-nte 侧栏**当前选中项**（青色竖条 + 青字）。
+
+    这是比「数序号」更稳的页面判据：ok-nte 侧栏有**两组**菜单
+    （上组＝页面导航、下组＝任务菜单），两组里都出现「任务」字样，
+    按名字子串定位必然歧义（AGENTS.md 明令禁止子串匹配）。
+
+    实测选中态特征：**左边缘一条青色竖条**（x≈2..5，高约 26px），
+    文字同时变青。本函数取竖条位置。
+
+    返回 {"cy": 中心y, "y0","y1","x0","x1"} 或 None（无选中项）。
+    """
+    h, w = frame_rgb.shape[:2]
+    cyan = nte_cyan_mask(frame_rgb)
+    # 只扫最左侧窄带（竖条所在处），避开内容区里的青色元素
+    xs = min(w, NTE_HL_X1)
+    if NTE_HL_X0 >= xs:
+        return None
+    band = cyan[:, NTE_HL_X0:xs]
+    spark = band.sum(axis=1) >= 2
+    bars = []
+    for a, b in _runs(spark, minlen=8):
+        sub = band[a:b + 1]
+        cols = np.where(sub.sum(axis=0) > 0)[0]
+        bars.append({
+            "cy": (a + b) / 2.0, "y0": a, "y1": b,
+            "x0": int(cols.min()) + NTE_HL_X0,
+            "x1": int(cols.max()) + NTE_HL_X0,
+        })
+    if log:
+        log(f"    [ok-nte] 侧栏选中竖条 {len(bars)} 条："
+            f"{[round(b['cy'], 1) for b in bars]}")
+    if not bars:
+        return None
+    # 取最长的（真竖条比图标碎片长）
+    bars.sort(key=lambda b: -(b["y1"] - b["y0"]))
+    return bars[0]
+
+
+def nte_find_checkboxes(frame_rgb, log=None):
+    """列出 ok-nte 任务页所有**已勾选**的复选框（青色 20x20）。
+
+    返回 [{"cy": 中心y, "y0","y1","x0","x1","checked": True}, ...]，按 y 升序。
+
+    ⚠️ 三处陷阱（均已实测）：
+      1. **未勾选的复选框是灰色**，不满足青色判据 ⇒ 本函数只返回**已勾选**的。
+         要区分「未勾选」与「该行不存在」，需另配灰色检测或按行距外推。
+      2. **底部「取消全选」复选框同色同尺寸**（实测 y=954..973 @1500x1000），
+         必须按 `y > h*NTE_BOTTOM_FRAC` 排除，否则会被当成第 9 个任务行。
+      3. 行距**在任务列表内恒为 62**，但**首行与第二行之间可能因折叠而变**
+         （实测曾见 124 = 2x62，即中间一行未勾选）。
+
+    ⚠️ 尺寸闸门不是多余的：探针实测**整帧纯青**时本函数会「检出」一个横贯
+    全宽的巨块，从而骗过 nte_locate_start。加宽/高上限后该合成帧被正确拒绝。
+    """
+    h, w = frame_rgb.shape[:2]
+    cyan = nte_cyan_mask(frame_rgb)
+    x1 = min(w, NTE_CHECK_X1)
+    if NTE_CHECK_X0 >= x1:
+        return []
+    band = cyan[:, NTE_CHECK_X0:x1]
+    spark = band.sum(axis=1) >= NTE_CHECK_MIN_PIX
+    y_cut = int(h * NTE_BOTTOM_FRAC)
+    boxes = []
+    for a, b in _runs(spark, minlen=NTE_CHECK_SIZE - 4):
+        if a >= y_cut:
+            continue                      # 陷阱 2：底部栏
+        if b - a + 1 > NTE_CHECK_MAX_H:   # 尺寸闸门：见 docstring 警告
+            continue
+        sub = band[a:b + 1]
+        cols = np.where(sub.sum(axis=0) > 0)[0]
+        if not len(cols):
+            continue
+        bw = int(cols.max() - cols.min() + 1)
+        if bw > NTE_CHECK_MAX_W:          # 尺寸闸门
+            continue
+        boxes.append({
+            "cy": (a + b) / 2.0,
+            "y0": a, "y1": b,
+            "x0": int(cols.min()) + NTE_CHECK_X0,
+            "x1": int(cols.max()) + NTE_CHECK_X0,
+            "checked": True,
+        })
+    if log:
+        gaps = [round(boxes[i + 1]["cy"] - boxes[i]["cy"], 1)
+                for i in range(len(boxes) - 1)]
+        log(f"    [ok-nte] 已勾选复选框 {len(boxes)} 个，行距={gaps}")
+    return boxes
+
+
+def nte_find_start_button(frame_rgb, log=None):
+    """定位 ok-nte **右下角唯一的「开始」按钮**（青色实心块）。
+
+    与 ok-ww 的 `scan_row_button`（按行扫描最右亮像素）**完全不同**：
+    ok-nte 全页只有一个「开始」，位置固定在右下角。
+
+    返回 {"box": (x0,y0,x1,y1), "center": (cx,cy), "size": (w,h)} 或 None。
+    """
+    h, w = frame_rgb.shape[:2]
+    cyan = nte_cyan_mask(frame_rgb)
+    y_cut = int(h * NTE_BOTTOM_FRAC)
+    bot = cyan[y_cut:, :]
+    if not bot.size:
+        return None
+
+    # 找宽度足够的列簇（排除图标一类细窄元素）
+    cspark = bot.sum(axis=0) >= 4
+    cands = []
+    for a, b in _runs(cspark, minlen=NTE_START_MIN_W):
+        if b - a + 1 < NTE_START_MIN_W:
+            continue
+        sub = bot[:, a:b + 1]
+        rows = np.where(sub.sum(axis=1) > 0)[0]
+        if not len(rows):
+            continue
+        cands.append({
+            "box": (a, int(rows.min()) + y_cut, b, int(rows.max()) + y_cut),
+            "center": ((a + b) // 2, int((rows.min() + rows.max()) // 2) + y_cut),
+            "size": (b - a + 1, int(rows.max() - rows.min() + 1)),
+        })
+    if not cands:
+        if log:
+            log("    [ok-nte] 底部未找到「开始」按钮（青色块）")
+        return None
+
+    # 取**最右**的那个：ok-nte 的「开始」在右下角，底部左侧是「取消全选」等
+    cands.sort(key=lambda c: -c["center"][0])
+    best = cands[0]
+    if log:
+        bx0, by0, bx1, by1 = best["box"]
+        log(f"    [ok-nte] 「开始」按钮 窗口内 x={bx0}..{bx1} y={by0}..{by1} "
+            f"中心={best['center']}")
+    return best
+
+
+def nte_locate_start(frame_rgb, log=None):
+    """ok-nte 定位总入口：确认在任务页 + 返回「开始」按钮坐标。
+
+    判据（两者都要成立，否则报 INV-24）：
+      1. 至少检出 1 个已勾选复选框（任务列表存在）；
+      2. 右下角存在「开始」按钮。
+
+    ⇒ 用**两个独立特征**交叉验证，而不是单靠一个锚点：
+    这正是 ADR 0002 的「联合唯一性」思想在 ok-nte 上的对应实现。
+    """
+    boxes = nte_find_checkboxes(frame_rgb, log=log)
+    if not boxes:
+        raise GuardFailure(
+            "INV-24",
+            "ok-nte 任务页判定失败：未检出任何**已勾选**的复选框。\n"
+            "  => 可能原因：不在任务页、任务列表为空、所有任务都未勾选、"
+            "或界面改版（复选框不再是青色 20x20）。")
+
+    btn = nte_find_start_button(frame_rgb, log=log)
+    if btn is None:
+        raise GuardFailure(
+            "INV-24",
+            f"ok-nte 任务页判定失败：检出 {len(boxes)} 个复选框，"
+            "但右下角未找到「开始」按钮。\n"
+            "  => 可能原因：底部栏被遮挡、窗口过矮、或界面改版。")
+
+    # 交叉验证：复选框行距应该接近 NTE_ROW_PITCH 的整数倍（结构性校验）
+    if len(boxes) >= 2:
+        gaps = [boxes[i + 1]["cy"] - boxes[i]["cy"] for i in range(len(boxes) - 1)]
+        base = min(gaps)
+        bad = [g for g in gaps if base > 0 and abs(g / base - round(g / base)) > 0.15]
+        if bad and log:
+            log(f"    [ok-nte][警告] 行距不成整数倍：{gaps} —— 可能有行未被勾选")
+
+    return {"boxes": boxes, "button": btn, "n_checked": len(boxes)}
