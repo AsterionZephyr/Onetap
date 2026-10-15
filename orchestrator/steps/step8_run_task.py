@@ -433,7 +433,7 @@ def click_and_confirm(state, frame, registry, args, log, prog=None):
 # --------------------------------------------------------- 8e 等待完成
 
 
-def wait_for_nte_completion(state, args, log):
+def wait_for_nte_completion(state, args, log, window_log=None):
     """ok-nte 的等待完成：**看日志**，不看画面（HANDOFF §6 / FRAMEWORK §0.1）。
 
     ## 为什么 ok-nte 不能用 ok-ww 那套
@@ -455,12 +455,28 @@ def wait_for_nte_completion(state, args, log):
 
     用户明确要求（m01268）：**个别任务失败与本项目无关，只看是否完成**。
     失败详情另行取出打印，不参与判定。
+
+    ## ★ window_log 必须**在点击之前**武装（FAULT #25）
+
+    原实现把 `verdict_mod.LogWindow()` 放在本函数里构造，而本函数是在
+    `click_and_confirm` **之后**才被调用的 ⇒ 基线偏移取在点击之后 ⇒
+    点击与构造之间 ok-nte 写的任何日志**全部读不到**。
+    实测：ok-nte 点开始后 1 秒内就写了大量启动日志（甚至可能写终止标记），
+    而 `LogWindow()` 此时才构造，`text()` 恒为 0 ⇒ verdict 恒 `unknown`
+    ⇒ 整条 ok-nte 链**永远等不到完成**，且**不报错**。
+    修法：由调用方在点击**前**构造并 `mark()`，再传进来复用（形参 window_log）。
+    未传时退回在本函数内构造（保持向后兼容，但会打印警告）。
     """
     log(f"\n[8e] 等待完成（ok-nte 日志判据）：采样 {POLL_INTERVAL}s；"
         f"兜底 {args.total_timeout:.0f}s")
     log(f"  日志窗口 {verdict_mod.NTE_LOGDIR}")
 
-    window_log = verdict_mod.LogWindow()
+    if window_log is None:
+        log("  [!!] 未提供预武装的 LogWindow —— 基线偏移取在点击之后，"
+            "点击到此刻之间的日志会丢失（FAULT #25）")
+        window_log = verdict_mod.LogWindow()
+    else:
+        log(f"  日志窗口已预武装（点击前建立），当前已捕获 {len(window_log.text())} 字符")
     started = time.time()
     last_report = 0.0
     last_alive = True
@@ -672,6 +688,15 @@ def body(args, state, log):
                 f"按钮窗口内 {tuple(loc['button']['center'])}")
 
     # --- 8c + 8d ---------------------------------------------------------
+    #
+    # ★ FAULT #25：ok-nte 的日志窗口必须**在点击之前**武装。
+    # 基线偏移若取在点击之后，点击到构造之间 ok-nte 写的日志全部丢失 ——
+    # 实测 text() 恒为 0、verdict 恒 unknown、整条链永远等不到完成且不报错。
+    nte_log_window = verdict_mod.LogWindow() if prog.key == "nte" else None
+    if nte_log_window is not None:
+        log(f"\n[8e-预备] 已武装 ok-nte 日志窗口（点击前），"
+            f"基线 {len(nte_log_window._files())} 个日志文件")
+
     try:
         ok, f = click_and_confirm(state, f, registry, args, log, prog=prog)
     except GuardFailure as e:
@@ -699,7 +724,8 @@ def body(args, state, log):
     #   ok-ww  -> 看画面（完成帧 exit_notice）
     #   ok-nte -> 看日志（终止标记）—— 游戏全屏时抓图必然全黑，读画面不可行
     if prog.key == "nte":
-        result, detail, frame_path = wait_for_nte_completion(state, args, log)
+        result, detail, frame_path = wait_for_nte_completion(
+            state, args, log, window_log=nte_log_window)
     else:
         result, detail, frame_path = wait_for_completion(state, registry, args, log)
     log(f"\n[结果] {result}：{detail}")
