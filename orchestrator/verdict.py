@@ -139,6 +139,11 @@ def nte_verdict(text, still_running=False):
         UNKNOWN  : 其他（**证据不足绝不报成功**，INV-30）
     """
     if not text or not text.strip():
+        # ⚠️ 顺序很重要（FAULT #25 的同族问题）：进程还在跑时，日志暂时为空是
+        # **正常**的（刚点击、ok-nte 还没写第一批日志），属于 RUNNING 而非 UNKNOWN。
+        # 早期实现无条件返回 UNKNOWN，会让操作者看到「unknown」而误以为出了事。
+        if still_running:
+            return RUNNING, ["本次运行尚无新增日志，但进程在运行"]
         return UNKNOWN, ["日志为空（本次运行尚无新增内容）"]
 
     ev = []
