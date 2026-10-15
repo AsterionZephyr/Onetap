@@ -343,7 +343,7 @@ ORDER = ["ok-ww", "ok-nte"]                 # 编排顺序（用户指定：ok-w
 | ~~勾选状态管理~~ | ✅ **已决策**：**不需要检查**，由用户自行配置 |
 | ~~多程序串联~~ | ✅ **已实现**：`--target both`（ok-ww → ok-nte 各跑一轮），见 §9 |
 | ~~ok-nte 收尾抢跑~~ | ✅ **已修**（FAULT #27）：见完成标记后给有界 settle 窗口，等它自己关游戏 |
-| **游戏 launcher 残留** | ok-nte 只关游戏本体 `HTGame.exe`，**留下 `NTEGame.exe`**。节点 9 已在 `completed` 分支报出，但按 Q3 **不主动杀** |
+| **游戏 launcher 残留** | ok-nte 只关游戏本体 `HTGame.exe`，**留下 `NTEGame.exe`**（launcher，7~9 个窗口含托盘图标）。节点 9 已在 `completed` 分支报出，但按 Q3 **不主动杀**。⚠️ **清理时必须显式用跨程序入口** `watchdog.force_close(None, all_programs=True)` —— `force_close(None)` 的 `None` **不等于「全部」**，会回落到 `programs.DEFAULT`（ok-ww），只按 `Client-Win64-Shipping.exe` 查，然后报「游戏进程已全部退出」（**为真但误导**，见 FAULT #32） |
 | **通用唯一性 API** | 把「全帧所有 >=0.85 位置」做成标准接口，任何定位都必须过这一关 |
 | **性能** | 当前 `all_hits` 是 Python 逐点循环，1520×1020 全帧扫描很慢。正式实现应用 numpy 向量化（`stride_tricks` + 矩阵相关） |
 
@@ -393,6 +393,17 @@ for target in 配置的顺序:
 
 ⚠️ **不要以为 `both` 是并发**：两程序沿用 INV-15 的独占前提，**串行**执行，
 且每轮各自独立计 30 分钟上限（不是共享一个总上限）。
+
+✅ **端到端实证（2026-10-16，`run-both-final`）**：`--target both --pre-clean`，**EXIT=0**，全程 16.4 分钟。
+
+| 轮 | 结果 | 用时 | 节点 8 |
+| --- | --- | --- | --- |
+| 1 ok-ww | 8/8 全过 | 4.8 分钟 | **268.3s completed**（日志终止标记） |
+| 2 ok-nte | 8/8 全过 | 11.6 分钟 | **620.7s completed**，`success` **7 项**、`failed=[]`、`skipped=['异象追猎']` |
+
+**末尾的「串联复检」段**（本块新增）当轮就抓到了 ok-nte 的 launcher 残留：
+`ok-nte 游戏 1 个 [('NTEGame.exe', 59272)]`，并给出清理指引 ——
+对比旧行为（只报「程序 0 个」让人以为全干净），这正是复检存在的意义。
 
 ### 9.1 GUI 的目标选择器
 
