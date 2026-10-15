@@ -166,12 +166,25 @@ def close_window(hwnd):
 
 
 def force_close(program=None, reason="timeout", log=None, dry_run=False,
-                close_game=True):
+                close_game=True, all_programs=False):
     """超时收尾：关目标程序窗口 → 关游戏窗口 → 必要时杀进程。
 
     返回一份结果 dict，供上层写进 state.json —— **必须落盘**，
     否则「超时后被强制收尾」这件事会变成静默行为。
+
+    ⚠️ `program=None` **不等于「所有程序」**，而是回落到 `programs.DEFAULT`
+    （ok-ww）。实测教训：`--target both` 跑完 ok-nte 那一轮后，
+    `NTEGame.exe` launcher 会残留；此时若有人图省事调 `force_close(None)`，
+    它只按 **ok-ww** 的 `game_names`（`Client-Win64-Shipping.exe`）去查，
+    查不到就打印「游戏进程已全部退出」—— **这句话为真，却是误导**：
+    ok-nte 的游戏一个都没碰。这正是 FAULT #31 的同型失效
+    （报了个让人以为一切干净的结论）。
+    要清两个程序的残留，必须显式传 `all_programs=True`。
     """
+    if all_programs:
+        return _force_close_all(reason=reason, log=log, dry_run=dry_run,
+                                close_game=close_game)
+
     prog = programs_mod.get(program)
     say = log or (lambda *_a: None)
     res = {
@@ -258,8 +271,56 @@ def force_close(program=None, reason="timeout", log=None, dry_run=False,
     return res
 
 
+def _force_close_all(reason="timeout", log=None, dry_run=False, close_game=True):
+    """对**每一个**已知程序各跑一次 force_close，并给出合并结论。
+
+    ⚠️ 存在的理由：`--target both` 会让**两个**程序先后启动游戏。
+    若其中一个的游戏 launcher 残留（实测 ok-nte 的 `NTEGame.exe` 就会），
+    按单个程序清理会因为「那不是我的游戏进程」而**看不见它**。
+    """
+    say = log or (lambda *_a: None)
+    say("")
+    say("=" * 74)
+    say(f"[超时收尾] 全部程序 —— {reason}")
+    say("=" * 74)
+    per = {}
+    for p in programs_mod.ALL:
+        per[p.key] = force_close(p, reason=reason, log=log, dry_run=dry_run,
+                                 close_game=close_game)
+    # 合并：把两个程序关掉的窗口/杀掉的进程汇总
+    res = {
+        "reason": reason,
+        "target": "*",
+        "dry_run": bool(dry_run),
+        "per_program": per,
+        "closed_windows": [h for r in per.values() for h in r["closed_windows"]],
+        "closed_game_windows": [h for r in per.values()
+                                for h in r["closed_game_windows"]],
+        "killed_target": [k for r in per.values() for k in r["killed_target"]],
+        "killed_game": [k for r in per.values() for k in r["killed_game"]],
+    }
+    if not dry_run:
+        say("")
+        say(f"[超时收尾] 全部程序复检：")
+        left = {}
+        for p in programs_mod.ALL:
+            t = window.running(p)
+            g = game_processes(p)
+            left[p.key] = {"target": [(n, i) for n, i, _ in t],
+                           "game": [(n, i) for n, i, _ in g]}
+            say(f"  {p.display:8s} 程序 {len(t)} 个 {left[p.key]['target']}"
+                f"  游戏 {len(g)} 个 {left[p.key]['game']}")
+        res["leftover"] = left
+        tot = sum(len(v["target"]) + len(v["game"]) for v in left.values())
+        if tot:
+            say(f"  [!!] 仍有 {tot} 个进程存活 —— 收尾不干净，需要人工处理")
+        else:
+            say("  [OK] 两个程序及其游戏均已清干净")
+    say("=" * 74)
+    return res
+
+
 def _reap(prog, log=None):
-    """等目标程序进程真正消失（FAULT #13 的同一教训）。"""
     deadline = time.time() + REAP_SECONDS
     while time.time() < deadline:
         if not window.running(prog):

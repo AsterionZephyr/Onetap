@@ -36,6 +36,7 @@ import time
 
 from .. import programs
 from .. import watchdog
+from .. import window
 from . import context
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -341,6 +342,31 @@ def run_both(args):
         log(f"  {disp:8s} 退出码 {rc}  {dt/60:.1f} 分钟  "
             f"{'通过' if rc == 0 else '未通过'}")
     log(f"运行目录 {root_run_dir}")
+
+    # --- 跨程序残留复检 ---------------------------------------------------
+    # ⚠️ 为什么必须单独做一遍：每轮的节点 9 只看**自己那个程序**的进程。
+    # 实测 ok-nte 正常跑完会关掉游戏本体 HTGame.exe，却把 launcher
+    # NTEGame.exe 留在后台（FAULT #31）。第一轮 ok-ww 更看不见它。
+    # 两个程序都跑完后统一查一次，才能说清「到底还剩什么」。
+    log("-" * 74)
+    log("[串联复检] 两个程序及其游戏的最终残留")
+    residue = {}
+    for key, disp, _rc, _dt in overall:
+        prog = programs.get(key)
+        t = window.running(prog)
+        g = watchdog.game_processes(prog)
+        residue[key] = {"target": [(n, i) for n, i, _ in t],
+                        "game": [(n, i) for n, i, _ in g]}
+        log(f"  {disp:8s} 程序 {len(t)} 个 {residue[key]['target']}"
+            f"  游戏 {len(g)} 个 {residue[key]['game']}")
+    left = sum(len(v["target"]) + len(v["game"]) for v in residue.values())
+    if left:
+        log(f"  [注意] 仍有 {left} 个进程存活。按 Q3 正常完成不主动杀；")
+        log(f"         要清干净请跑：python -X utf8 -m orchestrator.steps.main "
+            f"--target both --pre-clean")
+        log(f"         （或对单一程序跑 step9_cleanup --force）")
+    else:
+        log("  [OK] 两个程序及其游戏均已自行退干净")
     log("=" * 74)
     log.close()
     bad = [o for o in overall if o[2] != 0]
