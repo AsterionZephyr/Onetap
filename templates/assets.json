@@ -1,0 +1,68 @@
+{
+  "note": "资产元数据。app_version = 采集时的程序版本（见 INV-35）。尺寸以磁盘为准。1_nte.png 已弃用并删除。",
+  "assets": [
+    {
+      "file": "2_ww_page.png",
+      "owner": "ok-ww",
+      "w": 330,
+      "h": 38,
+      "page": "日常任务页",
+      "notes": "页面锚点：日历图标 + 「每日任务」",
+      "app_version": "OK-WW v3.7.3"
+    },
+    {
+      "file": "3_ww_menu.png",
+      "owner": "ok-ww",
+      "w": 21,
+      "h": 18,
+      "page": "任意（窗口固定元素）",
+      "notes": "☰ 菜单图标（身份锚点回退用；主用程序化检测）",
+      "app_version": "OK-WW v3.7.3"
+    },
+    {
+      "file": "2_ww.png",
+      "owner": "ok-ww",
+      "w": 1823,
+      "h": 42,
+      "page": "日常任务页",
+      "notes": "「每日任务」整行（行结构扫描参考）",
+      "app_version": "OK-WW v3.7.3"
+    },
+    {
+      "file": "1_ww.png",
+      "owner": "ok-ww",
+      "w": 27,
+      "h": 31,
+      "page": "任意（侧栏）",
+      "notes": "侧栏图标（已不用于身份）",
+      "app_version": "OK-WW v3.7.3"
+    },
+    {
+      "file": "3_nte_daily.png",
+      "owner": "ok-nte",
+      "w": 155,
+      "h": 35,
+      "page": "日常任务页",
+      "notes": "页面锚点：首行「异象界域」（v1.4.8 逐任务行布局）",
+      "app_version": "ok-nte v1.4.8"
+    },
+    {
+      "file": "4_nte_menu.png",
+      "owner": "ok-nte",
+      "w": 26,
+      "h": 20,
+      "page": "任意（窗口固定元素）",
+      "notes": "☰ 菜单图标（身份锚点回退用；主用程序化检测）",
+      "app_version": "ok-nte v1.4.8"
+    },
+    {
+      "file": "2_nte.png",
+      "owner": "ok-nte",
+      "w": 103,
+      "h": 46,
+      "page": "（已弃用）",
+      "notes": "旧版动作元素；v1.4.8 起改为行结构扫描",
+      "app_version": "ok-nte v1.4.8"
+    }
+  ]
+}

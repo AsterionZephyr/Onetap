@@ -1,0 +1,383 @@
+"""orchestrator.win32 — Win32 绑定的唯一来源
+
+本模块只做一件事：把用到的 Win32 调用按「返回值即成败」的口径包好。
+
+约束（HANDOFF §2.2）：
+  - 判断 Win32 调用成败**只看返回值**，不看 GetLastError（可能是无关调用的残留，实测残留值 203）。
+  - 不使用 GetCursorPos（本框架一次都不读光标，INV-16 / §3.6）。
+  - 一律使用物理像素（调用方须先声明 per-monitor DPI 感知，见 ensure_dpi_aware）。
+"""
+
+import ctypes
+import ctypes.wintypes as wt
+import re
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+# --- 常量 -------------------------------------------------------------
+
+SRCCOPY = 0x00CC0020
+BI_RGB = 0
+DIB_RGB_COLORS = 0
+
+SW_RESTORE = 9
+
+GA_ROOT = 2
+
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_ABSOLUTE = 0x8000
+
+TOKEN_QUERY = 0x0008
+TokenElevation = 20
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+# 最小化哨兵值（INV-22）
+ICONIC_SENTINEL = -32000
+
+
+# --- 结构体 -----------------------------------------------------------
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [("left", wt.LONG), ("top", wt.LONG),
+                ("right", wt.LONG), ("bottom", wt.LONG)]
+
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", wt.LONG), ("y", wt.LONG)]
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                ("biPlanes", wt.WORD), ("biBitCount", wt.WORD),
+                ("biCompression", wt.DWORD), ("biSizeImage", wt.DWORD),
+                ("biXPelsPerMeter", wt.LONG), ("biYPelsPerMeter", wt.LONG),
+                ("biClrUsed", wt.DWORD), ("biClrImportant", wt.DWORD)]
+
+
+class RGBQUAD(ctypes.Structure):
+    _fields_ = [("rgbBlue", ctypes.c_ubyte), ("rgbGreen", ctypes.c_ubyte),
+                ("rgbRed", ctypes.c_ubyte), ("rgbReserved", ctypes.c_ubyte)]
+
+
+class BITMAPINFO(ctypes.Structure):
+    _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", RGBQUAD * 1)]
+
+
+_PUL = ctypes.POINTER(ctypes.c_ulong)
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong), ("dwExtraInfo", _PUL)]
+
+
+class INPUT(ctypes.Structure):
+    class _I(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT)]
+
+    _anonymous_ = ("i",)
+    _fields_ = [("type", ctypes.c_ulong), ("i", _I)]
+
+
+# --- DPI 与提权 -------------------------------------------------------
+
+
+def ensure_dpi_aware():
+    """声明 per-monitor v2 DPI 感知。
+
+    必须在**任何抓帧或坐标换算之前**调用。调用后 GetSystemMetrics(0/1) 返回
+    物理像素（本机 2560x1440），与窗口 rect 处于同一坐标系。
+    """
+    try:
+        # 2 = PROCESS_PER_MONITOR_DPI_AWARE
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def is_admin():
+    """当前进程是否已提权（TRUE = 已提权）。
+
+    读的是**本进程的令牌**，不是「用户会话的权限」。
+    """
+    token = wt.HANDLE()
+    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(),
+                                     TOKEN_QUERY, ctypes.byref(token)):
+        return False
+    try:
+        elevated = ctypes.c_ulong(0)
+        size = ctypes.c_ulong(0)
+        ok = advapi32.GetTokenInformation(
+            token, TokenElevation, ctypes.byref(elevated),
+            ctypes.sizeof(elevated), ctypes.byref(size))
+        if not ok:
+            return False
+        # TokenElevation 的 TokenIsElevated 字段是 DWORD，非零即已提权
+        return bool(elevated.value)
+    finally:
+        kernel32.CloseHandle(token)
+
+
+# --- 窗口发现 ---------------------------------------------------------
+
+
+def get_window_text(hwnd):
+    n = user32.GetWindowTextLengthW(hwnd)
+    if n == 0:
+        return ""
+    buf = ctypes.create_unicode_buffer(n + 2)
+    user32.GetWindowTextW(hwnd, buf, n + 2)
+    return buf.value
+
+
+def get_class_name(hwnd):
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
+def get_window_pid(hwnd):
+    pid = wt.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value
+
+
+def get_window_rect(hwnd):
+    r = RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(r)):
+        return None
+    return r
+
+
+def find_windows(title_pattern):
+    """按标题**正则**发现窗口（INV-5：绝不用精确相等）。
+
+    返回 [(hwnd, pid, title, class_name), ...]。hwnd 不缓存，每次重新发现（INV-14）。
+    """
+    pat = re.compile(title_pattern) if isinstance(title_pattern, str) else title_pattern
+    found = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    def cb(hwnd, _):
+        title = get_window_text(hwnd)
+        if title and pat.search(title):
+            found.append((hwnd, get_window_pid(hwnd), title, get_class_name(hwnd)))
+        return True
+
+    user32.EnumWindows(cb, 0)
+    return found
+
+
+def window_state(hwnd):
+    """返回窗口几何与前台/可见状态。"""
+    r = get_window_rect(hwnd)
+    if r is None:
+        return None
+    return {
+        "rect": (r.left, r.top, r.right, r.bottom),
+        "left": r.left, "top": r.top,
+        "width": r.right - r.left,
+        "height": r.bottom - r.top,
+        "iconic": bool(user32.IsIconic(hwnd)),
+        "visible": bool(user32.IsWindowVisible(hwnd)),
+        "foreground": user32.GetForegroundWindow() == hwnd,
+    }
+
+
+def is_iconic_sentinel(left, top):
+    """窗口是否处于最小化哨兵位置（INV-22：置前台成功也可能最小化）。"""
+    return left <= ICONIC_SENTINEL or top <= ICONIC_SENTINEL
+
+
+# --- 前台与遮挡 -------------------------------------------------------
+
+
+def restore_window(hwnd):
+    """ShowWindow(SW_RESTORE)。返回后**必须**由调用方校验 rect（INV-22）。"""
+    return bool(user32.ShowWindow(hwnd, SW_RESTORE))
+
+
+def set_foreground(hwnd):
+    """尝试把窗口提到前台。返回 True 只说明调用被接受，**不代表窗口可用**。"""
+    return bool(user32.SetForegroundWindow(hwnd))
+
+
+def foreground_hwnd():
+    return user32.GetForegroundWindow()
+
+
+def top_window_at(x, y):
+    """目标屏幕坐标处**最顶层**窗口的根窗口（INV-23）。
+
+    比「ok-ww 在前台」更强：前台窗口可能并未覆盖该坐标。
+    """
+    hwnd = user32.WindowFromPoint(POINT(int(x), int(y)))
+    if not hwnd:
+        return 0
+    return user32.GetAncestor(hwnd, GA_ROOT)
+
+
+def screen_size():
+    return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def client_to_screen(hwnd, cx, cy):
+    """窗口内坐标 -> 屏幕坐标。换算关系为纯平移，无缩放因子（§3.1）。"""
+    p = POINT(int(cx), int(cy))
+    if not user32.ClientToScreen(hwnd, ctypes.byref(p)):
+        return None
+    return p.x, p.y
+
+
+# --- 抓帧 -------------------------------------------------------------
+
+
+def capture_region(x, y, w, h):
+    """BitBlt 抓一块屏幕区域，返回 (bytes BGRA, w, h) 或 None。
+
+    注意（INV-17）：越界抓取**会成功返回**并产出全黑帧，不报错。
+    故调用方必须先校验坐标在屏内，抓完再校验内容。
+    """
+    hdc_screen = user32.GetDC(0)
+    if not hdc_screen:
+        return None
+    hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+    hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, w, h)
+    old = gdi32.SelectObject(hdc_mem, hbmp)
+
+    ok = gdi32.BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, x, y, SRCCOPY)
+
+    bi = BITMAPINFO()
+    bi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+    bi.bmiHeader.biWidth = w
+    bi.bmiHeader.biHeight = -h          # 负值 = 自上而下
+    bi.bmiHeader.biPlanes = 1
+    bi.bmiHeader.biBitCount = 32
+    bi.bmiHeader.biCompression = BI_RGB
+
+    buf = ctypes.create_string_buffer(w * h * 4)
+    lines = gdi32.GetDIBits(hdc_mem, hbmp, 0, h, buf,
+                            ctypes.byref(bi), DIB_RGB_COLORS)
+
+    gdi32.SelectObject(hdc_mem, old)
+    gdi32.DeleteObject(hbmp)
+    gdi32.DeleteDC(hdc_mem)
+    user32.ReleaseDC(0, hdc_screen)
+
+    if not ok or lines == 0:
+        return None
+    return buf.raw, w, h
+
+
+def region_on_screen(x, y, w, h):
+    """抓帧前校验：坐标必须完整落在屏内（INV-17 的对策）。"""
+    sw, sh = screen_size()
+    return x >= 0 and y >= 0 and w > 0 and h > 0 and x + w <= sw and y + h <= sh
+
+
+# --- 输入 -------------------------------------------------------------
+
+
+def click(x, y):
+    """真实光标左键单击：SetCursorPos + SendInput（绝对归一化坐标）。
+
+    走输入队列，不受 UIPI 限制（ADR 0001）。
+    """
+    import time
+
+    user32.SetCursorPos(int(x), int(y))
+    time.sleep(0.08)
+
+    sw, sh = screen_size()
+    nx = int(x * 65535 / (sw - 1))
+    ny = int(y * 65535 / (sh - 1))
+
+    for flag in (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+                 MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP):
+        inp = INPUT()
+        inp.type = 0
+        inp.mi.dx = nx
+        inp.mi.dy = ny
+        inp.mi.dwFlags = flag
+        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        time.sleep(0.04)
+
+
+# --- 进程 -------------------------------------------------------------
+
+
+def process_image_path(pid):
+    """取进程的可执行文件全路径，取不到返回 None。
+
+    用于「杀之前先确认路径」（Q3 决策）。
+    """
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not h:
+        return None
+    try:
+        size = wt.DWORD(1024)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return None
+        return buf.value
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def terminate_process(pid):
+    """终止进程。返回 True/False，**只看返回值**。"""
+    PROCESS_TERMINATE = 0x0001
+    h = kernel32.OpenProcess(PROCESS_TERMINATE, False, int(pid))
+    if not h:
+        return False
+    try:
+        return bool(kernel32.TerminateProcess(h, 1))
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def list_processes(names):
+    """按进程名列出 (name, pid, exe_path)。
+
+    用 CreateToolhelp32Snapshot 而非 tasklist，避免子进程与编码问题。
+    """
+    TH32CS_SNAPPROCESS = 0x00000002
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wt.DWORD), ("cntUsage", wt.DWORD),
+                    ("th32ProcessID", wt.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wt.DWORD), ("cntThreads", wt.DWORD),
+                    ("th32ParentProcessID", wt.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wt.DWORD),
+                    ("szExeFile", ctypes.c_wchar * 260)]
+
+    wanted = {n.lower() for n in names}
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snap == -1:
+        return []
+    out = []
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            name = entry.szExeFile
+            if name.lower() in wanted:
+                pid = entry.th32ProcessID
+                out.append((name, pid, process_image_path(pid)))
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return out
