@@ -43,6 +43,7 @@ ok-ww 进程消失、而我们没抓到完成帧，有**两种无法用画面区
 """
 
 import os
+import re
 import time
 
 from .. import assets as assets_mod
@@ -337,6 +338,12 @@ CLICK_BLOCK_MIN = 2.0         # 任一块平均差 >= 此值即认为「有局�
 CLICK_PIXEL_DELTA = 10        # 单像素差超过此值才算「真的变了」
 CLICK_PIXEL_FRAC = 0.002      # 变化像素占比 >= 0.2% 即认为「有变化」（实测 0.5%）
 
+# ok-nte 见到终止标记后的**收尾宽限**（FAULT #27）。
+# 终止标记是「将要退出」的宣告；实测它还要 5.0s 才开始杀游戏、10.1s 才写完
+# `ok:quit app`。立刻返回会让节点 9 抢在它关游戏之前把它杀掉，
+# 留下全屏孤儿游戏窗口。这段窗口内等它自己退出（等不到就交给节点 9）。
+NTE_SETTLE_SECONDS = 20.0
+
 
 def frame_changed(before, after, log=None):
     """判断点击后画面是否真的变了；返回 (changed, 说明串)。
@@ -494,6 +501,40 @@ def wait_for_nte_completion(state, args, log, window_log=None):
         v, ev = window_log.verdict(still_running=alive)
 
         if v == verdict_mod.SUCCESS:
+            # ⚠️ FAULT #27：**先让它自己收尾，别急着宣布完成**。
+            #
+            # ok-nte 的终止标记是「**将要**退出」的宣告，不是「已经退出」。
+            # 实测 10-15 那次：终止标记 00:23:15.570 → 真正开始杀游戏
+            # 00:23:20.571（+5.0s）→ `ok:quit app` 00:23:25.646（+10.1s）。
+            # 若一见到标记就返回，节点 9 会在 1 秒内杀掉 ok-nte，
+            # **正好打断它关游戏的那一步** ⇒ 游戏成了孤儿进程（全屏盖住一切）。
+            # 本轮实测就是这么发生的：标记 02:54:06.809，节点 9 在 0.8s 后动手，
+            # 日志停在标记那一行，`Killing process(es)` 一行都没写出来。
+            #
+            # 所以：给一段**有界**的 settle 窗口，等它把关闭动作做完。
+            # 判据是「它自己退出」，不是「等到日志不再增长」——
+            # 后者会被无关日志拖住。超时就继续往下走（尽量干净，但不无限等）。
+            settle_deadline = time.time() + NTE_SETTLE_SECONDS
+            while time.time() < settle_deadline:
+                window_log.poll()
+                if not window.running(program=programs_mod.NTE):
+                    break
+                time.sleep(POLL_INTERVAL)
+
+            settled = not bool(window.running(program=programs_mod.NTE))
+            window_log.poll()
+            extra = window_log.text()
+            if re.search(verdict_mod.NTE_KILL_GAME, extra, re.I):
+                log("  [OK] ok-nte 已自行关闭游戏")
+            elif settled:
+                # 没看到关游戏的日志，但它确实退干净了。
+                # 不报「已关游戏」——日志里没有证据（INV-30）。
+                log("  [注意] ok-nte 已自行退出，但日志中未见关闭游戏的记录；"
+                    "游戏可能仍在运行，请人工确认")
+            else:
+                log(f"  [注意] 等了 {NTE_SETTLE_SECONDS:.0f}s ok-nte 仍未退出，"
+                    "将交由节点 9 清理")
+
             log(f"  +{elapsed:6.0f}s  *** 完成 ***（ok-nte 日志判据）")
             for e in ev:
                 log(f"      {e}")
