@@ -320,6 +320,74 @@ def locate_and_click_start(state, frame, registry, log):
 # ------------------------------------------------- 8c/8d 点击 + 验证
 
 
+# --- FAULT #23：点击生效判据必须**看得见局部响应** -------------------------
+#
+# 原来只看「整帧平均像素差 >= CHANGE_THRESHOLD(0.5)」，这在 ok-nte 上**必然误判**：
+# 实测点「开始」后 ok-nte 只弹一个顶部 toast「启动成功」，占全帧 0.5% 像素，
+# 整帧平均差只有 **0.153**（< 0.5）⇒ 判「画面几乎未变」⇒ 白烧 3 次重试。
+# 而那次点击**真的成功了**（日志随即出现 LauncherTask 启动游戏的记录）。
+#
+# 教训与 match.find_menu_glyph 那次同型：**把「全帧统计量」当「事件发生」的判据**，
+# 对「局部变化」不敏感。改为分块看**最大块差**，并辅以「有多少像素真的变了」。
+#
+# 实测本次样本：最大块差 3.20（块 行0列3，就是那条 toast）；变化>10 的像素 0.5%。
+CLICK_BLOCK_ROWS = 8          # 分块网格行数
+CLICK_BLOCK_COLS = 8          # 分块网格列数
+CLICK_BLOCK_MIN = 2.0         # 任一块平均差 >= 此值即认为「有局部变化」
+CLICK_PIXEL_DELTA = 10        # 单像素差超过此值才算「真的变了」
+CLICK_PIXEL_FRAC = 0.002      # 变化像素占比 >= 0.2% 即认为「有变化」（实测 0.5%）
+
+
+def frame_changed(before, after, log=None):
+    """判断点击后画面是否真的变了；返回 (changed, 说明串)。
+
+    **三个判据任一成立即算变化**（FAULT #23）：
+
+    1. 整帧平均差 >= CHANGE_THRESHOLD —— 原判据，对整页切换（ok-ww 导航）有效；
+    2. **任一 8x8 块**的平均差 >= CLICK_BLOCK_MIN —— 抓局部响应
+       （ok-nte 的 toast / 按钮按下态就靠这条）；
+    3. 变化像素（|Δ| > CLICK_PIXEL_DELTA）占比 >= CLICK_PIXEL_FRAC —— 兜底。
+
+    ⚠️ 为什么不能只留第 2 条：整块阈值对「大面积但幅度小的渐变」不敏感，
+    而第 1 条正好覆盖那种情形。三条**互补**，不是冗余。
+    """
+    b = before.astype("int16")
+    a = after.astype("int16")
+    if b.shape != a.shape:
+        # 尺寸变了本身就是「画面变了」（窗口被重建/缩放）
+        return True, f"帧尺寸改变 {b.shape} -> {a.shape}"
+
+    d = abs(a - b).mean(axis=2) if b.ndim == 3 else abs(a - b).astype("float64")
+    whole = float(d.mean())
+
+    H, W = d.shape
+    worst = 0.0
+    worst_rc = (0, 0)
+    for i in range(CLICK_BLOCK_ROWS):
+        y0, y1 = i * H // CLICK_BLOCK_ROWS, (i + 1) * H // CLICK_BLOCK_ROWS
+        for j in range(CLICK_BLOCK_COLS):
+            x0, x1 = j * W // CLICK_BLOCK_COLS, (j + 1) * W // CLICK_BLOCK_COLS
+            m = float(d[y0:y1, x0:x1].mean())
+            if m > worst:
+                worst, worst_rc = m, (i, j)
+
+    frac = float((d > CLICK_PIXEL_DELTA).mean())
+
+    why = (f"整帧={whole:.2f}/{CHANGE_THRESHOLD}"
+           f" 最大块={worst:.2f}@块{worst_rc}/{CLICK_BLOCK_MIN}"
+           f" 变化像素={frac * 100:.2f}%/{CLICK_PIXEL_FRAC * 100:.1f}%")
+    if log:
+        log(f"  点击后：{why}")
+
+    if whole >= CHANGE_THRESHOLD:
+        return True, why
+    if worst >= CLICK_BLOCK_MIN:
+        return True, why
+    if frac >= CLICK_PIXEL_FRAC:
+        return True, why
+    return False, why
+
+
 def click_and_confirm(state, frame, registry, args, log, prog=None):
     """点击「开始」并验证生效；无变化则**重试整轮**（Q8：N=3）。
 
@@ -347,13 +415,13 @@ def click_and_confirm(state, frame, registry, args, log, prog=None):
         log("\n[8d] 验证已启动")
         time.sleep(1.2)
         _, after = grab(state, strict=False, log=log)
-        diff = float(abs(after.rgb.astype("int16") - before).mean())
-        log(f"  点击后帧差异 = {diff:.2f}（阈值 {CHANGE_THRESHOLD}）")
-        if diff >= CHANGE_THRESHOLD:
-            log("  [OK] 画面已变化，点击很可能生效")
+        changed, why = frame_changed(before, after.rgb, log=log)
+        if changed:
+            log(f"  [OK] 画面已变化（{why}），点击很可能生效")
             shot(state, after, "after-click", log)
             return True, after
-        log("  [!!] 画面几乎未变 —— 点击可能落空（ok-ww 失焦会静默挂起）")
+        log(f"  [!!] 画面几乎未变（{why}）—— 点击可能落空"
+            f"（ok-ww 失焦会静默挂起）")
         shot(state, after, f"no-change-try{attempt}", log)
         if attempt < CLICK_RETRIES:
             log(f"  等待 {CLICK_RETRY_INTERVAL:.0f}s 后重试整轮")
@@ -405,7 +473,7 @@ def wait_for_nte_completion(state, args, log):
             return TIMEOUT, f"整条链超过兜底上限 {args.total_timeout:.0f}s", None
 
         window_log.poll()
-        alive = bool(window.running(prog=programs_mod.NTE))
+        alive = bool(window.running(program=programs_mod.NTE))
         last_alive = alive
         v, ev = window_log.verdict(still_running=alive)
 
