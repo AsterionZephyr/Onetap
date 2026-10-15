@@ -709,30 +709,48 @@ def wait_for_nte_completion(state, args, log, window_log=None):
         time.sleep(POLL_INTERVAL)
 
 
-def wait_for_completion(state, registry, args, log):
+def wait_for_completion(state, registry, args, log, window_log=None):
     """等待完成 / 超时。返回 (result, detail, shot_path)。
 
-    判据（Q7 决策）：**同一帧内 横幅 + 退出通知**。
-    「横幅」用顶部条带亮度代理，「退出通知」用图像资产匹配 —— 不引入 OCR。
-    宁可漏判（退回超时），不可误判 —— 误判会把一次卡死当成成功。
+    判据（**FAULT #15 更正后**）：主判据是 **ok-ww 的日志终止标记**，
+    画面（完成帧 `exit_notice`）降为**补充证据**。
+
+    为什么改：长期记录说 ok-ww 只能看画面，而那幅完成帧从未采集，
+    于是节点 8 「只能以超时收场」。实测推翻 —— ok-ww 与 ok-nte 同属
+    ok-script 运行时，收尾写的是**逐字相同**的
+    `TaskExecutor:Successfully Executed Task, Exiting Game and App!`，
+    且凡跑到完成的运行都**恰好写一次**（见 verdict.ww_verdict 的注释）。
+    ⇒ 不需要那张截图也能判完成。
+
+    仍然**宁可漏判**（退回超时），**不可误判** —— 误判会把一次卡死当成成功。
     """
-    log(f"\n[8e] 等待完成：采样 {POLL_INTERVAL}s；"
-        f"冻结判定 {args.freeze_seconds:.0f}s；兜底 {args.total_timeout:.0f}s")
+    if window_log is not None:
+        log(f"\n[8e] 等待完成（ok-ww 日志判据）：采样 {POLL_INTERVAL}s；"
+            f"冻结判定 {args.freeze_seconds:.0f}s；兜底 {args.total_timeout:.0f}s")
+        log(f"  日志窗口 {window_log.logdir}")
+        log(f"  日志窗口已预武装（点击前建立），当前已捕获 "
+            f"{len(window_log.text())} 字符")
+    else:
+        log(f"\n[8e] 等待完成：采样 {POLL_INTERVAL}s；"
+            f"冻结判定 {args.freeze_seconds:.0f}s；兜底 {args.total_timeout:.0f}s")
 
     exit_tpl = None
     exit_asset = registry.get("exit_notice")
     if exit_asset and exit_asset.available:
         exit_tpl = exit_asset.load()
-    else:
-        log("  [警告] 退出通知资产未采集 —— 无法判定「正常完成」，"
-            "本节点只能以「超时」收场")
-        log("         这是当前**唯一的功能缺口**，采集方法见 assets.json")
+    if window_log is None and exit_tpl is None:
+        log("  [警告] 退出通知资产未采集，且未武装日志窗口 —— "
+            "无法判定「正常完成」，本节点只能以「超时」收场")
+    elif exit_tpl is None:
+        log("  [注] 退出通知资产仍未采集；改用**日志终止标记**判定完成"
+            "（FAULT #15：ok-ww 与 ok-nte 共用同一句终止标记）")
 
     detector = state_mod.FreezeDetector(args.freeze_seconds)
     started = time.time()
     last_fp = None
     completion_seen = False
     last_report = 0.0
+    last_verdict = None
 
     while True:
         now = time.time()
@@ -741,21 +759,62 @@ def wait_for_completion(state, registry, args, log):
         if elapsed > args.total_timeout:
             return TIMEOUT, f"整条链超过兜底上限 {args.total_timeout:.0f}s", None
 
+        # --- 主判据：日志终止标记（FAULT #15）---
+        if window_log is not None:
+            window_log.poll()
+            v, vev = window_log.verdict(still_running=window.okww_running(),
+                                        program=programs_mod.WW)
+            if v != last_verdict:
+                log(f"  +{elapsed:6.0f}s  日志判据：{v}（{vev[-1] if vev else ''}）")
+                last_verdict = v
+            if v == verdict_mod.SUCCESS:
+                log(f"  +{elapsed:6.0f}s  *** 完成 ***（ok-ww 日志终止标记）")
+                for e in vev:
+                    log(f"        {e}")
+                # 收尾宽限（与 ok-nte 同策略，FAULT #27）：终止标记是
+                # 「**将要**退出」的宣告，随后它才去关游戏、关自己。
+                # 抢在这中间动手会打断它关游戏。
+                settle_end = time.time() + NTE_SETTLE_SECONDS
+                while time.time() < settle_end:
+                    window_log.poll()
+                    if not window.okww_running():
+                        break
+                    time.sleep(POLL_INTERVAL)
+                window_log.poll()
+                if re.search(verdict_mod.WW_KILL_GAME, window_log.text(), re.I):
+                    log("  [OK] ok-ww 已自行关闭游戏")
+                elif not window.okww_running():
+                    log("  [注意] ok-ww 已自行退出，但日志中未见关闭游戏的记录；"
+                        "游戏可能仍在运行，请人工确认")
+                else:
+                    log(f"  [注意] 等了 {NTE_SETTLE_SECONDS:.0f}s ok-ww 仍未退出，"
+                        "将交由节点 9 清理")
+                return COMPLETED, "日志出现终止标记：" + "；".join(vev), None
+
         # ok-ww 进程没了 —— 分三种，**必须区分**（见文件头「终止行为三分」）
         if not window.okww_running():
             if completion_seen:
                 return COMPLETED, "ok-ww 已自行退出（此前抓到完成帧）", None
+            # 再给日志一次机会：进程刚退，收尾那几行可能才落盘
+            if window_log is not None:
+                window_log.poll()
+                v2, vev2 = window_log.verdict(still_running=False,
+                                              program=programs_mod.WW)
+                if v2 == verdict_mod.SUCCESS:
+                    log(f"  +{elapsed:6.0f}s  *** 完成 ***"
+                        f"（进程已退出，由日志确认）")
+                    return COMPLETED, "日志出现终止标记：" + "；".join(vev2), None
             # 消失但没抓到完成帧 —— **成因不可辨**：
             #   (a) 今日任务已完成 -> ok-ww 无事可做而异常退出（实测行为：
             #       不关自己、不关游戏，需人工收尾）
             #   (b) 崩溃
             # 按 INV-30 报 UNKNOWN，**不默认成功、也不武断出错**。
-            log(f"  +{elapsed:6.0f}s  ok-ww 进程消失（未抓到完成帧）")
+            log(f"  +{elapsed:6.0f}s  ok-ww 进程消失（日志中也没有终止标记）")
             return UNKNOWN, (
-                "ok-ww 进程消失，但从未抓到完成帧 —— 无法区分「今日任务已完成、"
+                "ok-ww 进程消失，但日志中没有终止标记 —— 无法区分「今日任务已完成、"
                 "无事可做而异常退出」与「崩溃」。这是证据不足，不是判定失败。"
                 "常见成因：今日任务此前已完成（ok-ww 找不到要做的任务会异常退出，"
-                "且不会关闭自己与游戏）。exit_notice 资产未采集，故无完成帧可依。"
+                "且不会关闭自己与游戏）。"
             ), None
 
         info = window.find_okww_window()
@@ -872,13 +931,17 @@ def body(args, state, log):
 
     # --- 8c + 8d ---------------------------------------------------------
     #
-    # ★ FAULT #25：ok-nte 的日志窗口必须**在点击之前**武装。
-    # 基线偏移若取在点击之后，点击到构造之间 ok-nte 写的日志全部丢失 ——
+    # ★ FAULT #25：日志窗口必须**在点击之前**武装。
+    # 基线偏移若取在点击之后，点击到构造之间程序写的日志全部丢失 ——
     # 实测 text() 恒为 0、verdict 恒 unknown、整条链永远等不到完成且不报错。
-    nte_log_window = verdict_mod.LogWindow() if prog.key == "nte" else None
-    if nte_log_window is not None:
-        log(f"\n[8e-预备] 已武装 ok-nte 日志窗口（点击前），"
-            f"基线 {len(nte_log_window._files())} 个日志文件")
+    #
+    # ★ FAULT #15：ok-ww **也要**武装。它同样写那句共用的终止标记，
+    # 过去只认 ok-nte 的目录（还默认错指到不存在的路径），于是 ok-ww 只能靠
+    # 那幅从未采集的完成帧、以「超时」收场。
+    prog_log_window = verdict_mod.LogWindow(program=prog)
+    log(f"\n[8e-预备] 已武装 {prog.display} 日志窗口（点击前），"
+        f"目录 {prog_log_window.logdir}，"
+        f"基线 {len(prog_log_window._files())} 个日志文件")
 
     try:
         ok, f = click_and_confirm(state, f, registry, args, log, prog=prog)
@@ -903,14 +966,16 @@ def body(args, state, log):
                 f"连续 {CLICK_RETRIES} 轮点击后画面无变化 —— ok-ww 很可能失焦静默挂起")
 
     # --- 8e --------------------------------------------------------------
-    # ⚠️ 判据按**目标程序**分派（HANDOFF §6）：
-    #   ok-ww  -> 看画面（完成帧 exit_notice）
-    #   ok-nte -> 看日志（终止标记）—— 游戏全屏时抓图必然全黑，读画面不可行
+    # 判据按**目标程序**分派（HANDOFF §6）。两程序**都走日志判据**：
+    #   ok-nte -> 终止标记 + 逐项汇总 success/failed/skipped
+    #   ok-ww  -> 终止标记（FAULT #15：实测它写的是**逐字相同**的那句话）
+    # ok-ww 侧不再依赖画面完成帧；抓帧仍保留，作为超时时落盘取证。
     if prog.key == "nte":
         result, detail, frame_path = wait_for_nte_completion(
-            state, args, log, window_log=nte_log_window)
+            state, args, log, window_log=prog_log_window)
     else:
-        result, detail, frame_path = wait_for_completion(state, registry, args, log)
+        result, detail, frame_path = wait_for_completion(
+            state, registry, args, log, window_log=prog_log_window)
     log(f"\n[结果] {result}：{detail}")
     state.set("result", result)
     state.set("result_detail", detail)

@@ -184,6 +184,84 @@ def nte_verdict(text, still_running=False):
     return UNKNOWN, ev + ["序列不完整且无终止标记"]
 
 
+# --- FAULT #15：ok-ww 的终态**同样可以从日志判定**（新增）-------------------
+#
+# 长期以来的记录是：ok-ww 的判定依据是**画面**（完成帧 `exit_notice`），
+# 而那张图**从未采集**，于是「无法判定正常完成，只能以超时收场」，
+# 被记为本项目「唯一的功能缺口」。
+#
+# **实测推翻了该前提。** ok-ww 与 ok-nte 是同一套 ok-script 运行时，
+# 收尾写的是**逐字相同**的那句话（同一进程 TaskExecutor、同一句文案）：
+#
+#     2026-10-15 20:37:29,623 INFO TaskExecutor DailyTask:Daily Task Completed
+#     2026-10-15 20:37:29,624 INFO TaskExecutor TaskExecutor:Successfully \
+#            Executed Task, Exiting Game and App!
+#     2026-10-15 20:37:34,624 INFO TaskExecutor process:Killing process(es) \
+#            with absolute path: ...\Client-Win64-Shipping.exe
+#
+# 逐文件统计（ok-ww 全部日志）：凡**跑到完成**的次数，终止标记与「杀游戏」
+# 都是**恰好各 1 次**；而 10-12/13/14 三个文件两者皆 0（那几次没跑完）。
+# ok-nte 侧同样统计到 8 次。⇒ 这是**两程序共用**的终止标记，
+# 差别只在目标游戏进程名（ok-ww=`Client-Win64-Shipping.exe`）。
+#
+# 故 ok-ww **不需要**那张完成帧截图也能判完成。`exit_notice` 图像仍可作为
+# 补充证据，但不再是判定的**前置条件**。
+#
+# ⚠️ 两条必须保留的纪律：
+#   1. 必须用 `LogWindow`（按字节偏移切窗口），不能按 `ok:quit app` 分段 ——
+#      上一次被强制终止时不写 `ok:quit app`，会把两次运行合并、**借用**上一次的
+#      成功标记（假阳性，实测点击后 1 秒就报 SUCCESS）。
+#   2. 逐项结果 ok-ww 侧没有 ok-nte 那种 `info_set success [...]` 汇总
+#      （实测 `DailyRoutineTask` 痕迹为 0），故**不解析汇总**，只用终止标记。
+WW_DAILY_END = r"DailyTask:Daily Task Completed"
+WW_KILL_GAME = r"Trying to kill the exe \{[^}]*Client-Win64-Shipping\.exe"
+
+
+def ww_verdict(text, still_running=False):
+    """对 ok-ww 的日志文本判定终态。返回 (verdict, evidence[])。
+
+    与 `nte_verdict` 同构，只是标记名不同：
+
+        SUCCESS  : 出现共用终止标记，**或**出现 `DailyTask:Daily Task Completed`
+        RUNNING  : 无终止标记且进程仍在运行
+        NO_TASK  : 无任何任务痕迹
+        UNKNOWN  : 其他（**证据不足绝不报成功**，INV-30）
+    """
+    if not text or not text.strip():
+        if still_running:
+            return RUNNING, ["本次运行尚无新增日志，但进程在运行"]
+        return UNKNOWN, ["日志为空（本次运行尚无新增内容）"]
+
+    ev = []
+    terminal = bool(re.search(NTE_TERMINAL_MARK, text))
+    daily_end = bool(re.search(WW_DAILY_END, text))
+    killed = bool(re.search(WW_KILL_GAME, text, re.I))
+
+    # ok-ww 的日常痕迹：阶段行 `info_set current task <phase>`。
+    # ⚠️ 实测 ok-ww **没有** ok-nte 那种 `DailyRoutineTask:info_set success [...]`
+    # 逐项汇总（`DailyRoutineTask` 计数为 0），故此处不做汇总解析 ——
+    # 若照抄 ok-nte 的正则，会天天报「未解析到汇总行」的假警报。
+    phases = re.findall(r"info_set current task\s+(\S+)", text)
+
+    ev.append(f"终止标记={terminal} 日常结束={daily_end} 杀游戏={killed}")
+    if phases:
+        ev.append(f"阶段痕迹 {len(phases)} 条，末条={phases[-1]}")
+
+    if not (terminal or daily_end or phases):
+        if still_running:
+            return RUNNING, ev + ["尚无任务痕迹，进程在运行"]
+        return NO_TASK, ev + ["无任务痕迹"]
+
+    if terminal:
+        return SUCCESS, ev + ["出现终止标记（进程收尾）"]
+    if daily_end:
+        return SUCCESS, ev + ["日常任务结束（Daily Task Completed）"]
+
+    if still_running:
+        return RUNNING, ev + ["仍在运行"]
+    return UNKNOWN, ev + ["序列不完整且无终止标记"]
+
+
 # --- FAULT #30：执行器暂停（游戏窗口被最小化）-----------------------------
 #
 # ok-nte 在游戏窗口被最小化时写下这一行，然后**暂停自己的执行器**：
@@ -245,9 +323,54 @@ def nte_executor_paused(text):
                    f"收尾 {exit_actions} —— 已自行恢复，不算卡死")
 
 
+def logdir_self_check(program=None):
+    """校验日志目录真实存在（防止「路径写错 ⇒ 永远读空 ⇒ 静默失效」）。
+
+    返回问题字符串列表；空列表表示正常。
+    这条断言是有来历的：`_logdir_for` 初版把目录名写成 `ok-<key>` 漏了
+    `ok-` 前缀，得到不存在的 `...\\apps\\ww\\working\\logs`，
+    而 `LogWindow` 对此**不报错**，只是恒返回 RUNNING/UNKNOWN。
+    """
+    from . import programs as programs_mod
+
+    progs = [programs_mod.get(program)] if program is not None else list(programs_mod.ALL)
+    problems = []
+    for p in progs:
+        d = _logdir_for(p)
+        if not Path(d).exists():
+            problems.append(f"{p.key}: 日志目录不存在 {d}")
+        elif not list(Path(d).glob("ok-script*.log")):
+            problems.append(f"{p.key}: 日志目录里没有 ok-script*.log ({d})")
+    return problems
+
+
+def _key_of(program):
+    """把 program 参数（Program 实例 / key 字符串 / None）归一成 key。"""
+    if program is None:
+        return None
+    key = getattr(program, "key", program)
+    return str(key)
+
+
+def _logdir_for(program):
+    """按目标程序给出日志目录（FAULT #15：两程序目录不同）。
+
+    ⚠️ 目录名是 `ok-<key>`（`ok-ww` / `ok-nte`），**不是** `<key>`。
+    实测若写成 `<key>` 会得到 `...\\apps\\ww\\working\\logs` 这种**不存在的路径**，
+    `LogWindow` 于是永远读到空日志 ⇒ 恒报 RUNNING/UNKNOWN ⇒ **静默失效**。
+    故这里显式登记，并允许用 Program 上的 `logdir` 覆盖。
+    """
+    from . import programs as programs_mod
+
+    prog = programs_mod.get(program) if not hasattr(program, "key") else program
+    override = getattr(prog, "logdir", None)
+    if override:
+        return Path(override)
+    return Path(prog.root_dir) / "data" / "apps" / f"ok-{prog.key}" / "working" / "logs"
+
+
 class LogWindow:
     """以**文件字节偏移**界定「本次运行」的日志窗口。
-
     ## 为什么不能按 `ok:quit app` 分段
 
     若上一次运行被**外部强制终止**（本框架的兜底清理就会这么做），
@@ -262,10 +385,20 @@ class LogWindow:
         v, ev = w.verdict()            # 只看本次新增的日志
     """
 
-    def __init__(self, logdir=None):
+    def __init__(self, logdir=None, program=None):
+        """logdir 优先；否则按 program 选对应程序的日志目录；默认 ok-nte。
+
+        ⚠️ 两个程序的日志目录**不同**（`...\\ok-ww\\...\\logs` 与
+        `...\\ok-nte\\...\\logs`）。若只认 ok-nte 的目录，
+        对 ok-ww 跑判据会永远读到「空日志」⇒ 恒返回 RUNNING/UNKNOWN，
+        **静默失效**（不报错，只是永远判不出来）。
+        """
+        if logdir is None and program is not None:
+            logdir = _logdir_for(program)
         self.logdir = Path(logdir or NTE_LOGDIR)
         self._seen = {}
         self._buf = []
+        self._program = program
         self.mark()
 
     def mark(self):
@@ -321,7 +454,10 @@ class LogWindow:
         """**本次运行**累积的新增日志（不含历史）。"""
         return "\n".join(self._buf)
 
-    def verdict(self, still_running=False):
+    def verdict(self, still_running=False, program=None):
+        prog = program or self._program
+        if prog is not None and _key_of(prog) == "ww":
+            return ww_verdict(self.text(), still_running=still_running)
         return nte_verdict(self.text(), still_running=still_running)
 
     def failures(self):
@@ -331,9 +467,12 @@ class LogWindow:
 def verdict_for(program=None, text=None, still_running=False, log_window=None):
     """按**目标程序**分派判据。
 
-    ok-nte ⇒ 日志判据（本模块）。ok-ww ⇒ **不走这里**
-    （它用画面完成帧，见 orchestrator.py），故显式拒绝，
-    避免「以为在用日志判定 ok-ww」这种**静默的错配**。
+    两个程序现在**都**走日志判据（FAULT #15 更正了 ok-ww 的旧结论）：
+      - ok-nte ⇒ `nte_verdict`（额外有逐项汇总 success/failed/skipped）
+      - ok-ww  ⇒ `ww_verdict`（只有终止标记与阶段行，无逐项汇总）
+
+    仍保留「未知程序显式抛错」的纪律 —— 不回落默认，
+    避免「以为在判定 A 实际判定了 B」这种静默错配。
     """
     from . import programs as programs_mod
 
@@ -343,7 +482,10 @@ def verdict_for(program=None, text=None, still_running=False, log_window=None):
             return log_window.verdict(still_running=still_running)
         return nte_verdict(text or "", still_running=still_running)
 
-    raise ValueError(
-        f"{prog.display} 的终态判据**不是日志判据**"
-        f"（它用画面完成帧 exit_notice，见 orchestrator.py）。"
-        f"请勿把 verdict_for 用于 {prog.key}。")
+    if prog.key == "ww":
+        if log_window is not None:
+            return log_window.verdict(still_running=still_running, program=prog)
+        return ww_verdict(text or "", still_running=still_running)
+
+    raise ValueError(f"没有为 {prog.key} 实现终态判据；请勿回落默认值。")
+

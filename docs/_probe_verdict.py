@@ -139,11 +139,23 @@ check("变小后整体重读（能看到新内容）",
 print("\n[分派] verdict_for 只服务 ok-nte，用错必须报错")
 v, _ = V.verdict_for(P.NTE, text=DAILY_END)
 check("nte ⇒ 走日志判据", v == V.SUCCESS, f"实际 {v}")
+
+# ⚠️ 本条断言在 FAULT #15 之后**被有意反转**。
+# 旧结论：ok-ww 的判据是画面完成帧，故 verdict_for(WW) 必须抛 ValueError，
+#         防止「以为在用日志判定 ok-ww」。
+# 新证据：ok-ww 与 ok-nte 同属 ok-script 运行时，收尾写的是**逐字相同**的
+#         `TaskExecutor:Successfully Executed Task, Exiting Game and App!`，
+#         且凡跑到完成的运行都恰好写一次 ⇒ ok-ww **也能**走日志判据。
+# 故现在要求：WW 走 ww_verdict 且能认出终止标记（而不是抛错）。
+ww_v, ww_ev = V.verdict_for(P.WW, text=TERMINAL)
+check("ww ⇒ 走日志判据并认出终止标记（FAULT #15）",
+      ww_v == V.SUCCESS, f"实际 {ww_v}")
+# 但「未知程序必须抛错」这条纪律**保留** —— 不回落默认仍然重要。
 try:
-    V.verdict_for(P.WW, text=DAILY_END)
-    check("ww ⇒ 必须抛 ValueError（不得静默走日志判据）", False, "没抛异常")
-except ValueError:
-    check("ww ⇒ 必须抛 ValueError（不得静默走日志判据）", True)
+    V.verdict_for("不存在的程序", text=TERMINAL)
+    check("未知程序 ⇒ 必须抛错（不得回落默认）", False, "没抛异常")
+except (ValueError, KeyError):
+    check("未知程序 ⇒ 必须抛错（不得回落默认）", True)
 
 print("\n[真日志] 本机 ok-nte 日志回归")
 if V.NTE_LOGDIR.is_dir():
