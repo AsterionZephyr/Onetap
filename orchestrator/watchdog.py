@@ -149,7 +149,15 @@ def game_processes(program):
 
 
 def close_window(hwnd):
-    """给窗口发 WM_CLOSE（体面退出）。返回是否发送成功。"""
+    """给窗口发 WM_CLOSE（体面退出）。返回是否发送成功。
+
+    ⚠️ **必须**先判 hwnd 有效。实测 `PostMessageW(hwnd=0, WM_CLOSE)` 返回
+    非零（成功）—— 因为 Win32 把**句柄 0 当作 HWND_BROADCAST**，会把
+    WM_CLOSE **广播给所有顶层窗口**。那会把整个桌面的窗口都关掉，
+    而我们只想关目标程序那一个。故这里显式拒绝 0 / None。
+    """
+    if not hwnd:
+        return False
     WM_CLOSE = 0x0010
     try:
         return bool(win32.user32.PostMessageW(hwnd, WM_CLOSE, 0, 0))
