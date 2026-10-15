@@ -51,6 +51,23 @@ NODE_STYLE = {
     None:      ("\u25cb", "#9e9e9e", "#ffffff", "未运行"),
 }
 
+# 目标程序下拉项。中文在前（人读），--target 的取值在括号里（机读）。
+# ⚠️ 与 gui/chain.py 同样的理由：这里**独立声明**，不 import orchestrator，
+# 否则 main.py 一坏，GUI 连修它的界面都打不开。
+TARGET_CHOICES = [
+    "跟随记录（默认）",
+    "ok-ww",
+    "ok-nte",
+    "两个都跑（先 ok-ww 后 ok-nte）",
+]
+# 显示文本 -> --target 取值。None = 不传该参数。
+TARGET_ARG = {
+    "跟随记录（默认）": None,
+    "ok-ww": "ww",
+    "ok-nte": "nte",
+    "两个都跑（先 ok-ww 后 ok-nte）": "both",
+}
+
 
 class Bus:
     """worker -> 主线程的唯一通道。只放数据，不放 widget 操作。"""
@@ -88,6 +105,8 @@ class App(tk.Tk):
         self.dry_run = tk.BooleanVar(value=dry_run)
         self.only_var = tk.StringVar(value=only or "")
         self.resume_var = tk.BooleanVar(value=False)
+        # 目标程序："" = 跟随 state.json；"both" = 两程序串联
+        self.target_var = tk.StringVar(value=TARGET_CHOICES[0])
         self.python_var = tk.StringVar(value=sys.executable)
 
         self.node_rows = {}      # 第 1 页的步骤行
@@ -219,6 +238,12 @@ class App(tk.Tk):
         ttk.Separator(ctl, orient="vertical").pack(side="left", fill="y", padx=10)
 
         ttk.Checkbutton(ctl, text="dry-run", variable=self.dry_run).pack(side="left")
+        ttk.Separator(ctl, orient="vertical").pack(side="left", fill="y", padx=10)
+        # 目标程序选择器。"" 表示不传 --target（跟随 state.json 的记录，
+        # 这样 `接着上次` 不会把 ok-nte 的运行悄悄改回 ok-ww）。
+        ttk.Label(ctl, text="目标").pack(side="left")
+        ttk.Combobox(ctl, textvariable=self.target_var, width=14, state="readonly",
+                     values=TARGET_CHOICES).pack(side="left", padx=(4, 0))
         ttk.Label(ctl, text="只跑节点").pack(side="left", padx=(12, 2))
         ttk.Combobox(ctl, textvariable=self.only_var, width=4, state="readonly",
                      values=[""] + chain.STEP_IDS).pack(side="left")
@@ -432,6 +457,12 @@ class App(tk.Tk):
             args += ["--only", only]
         if self.resume_var.get():
             args.append("--resume")
+        # 目标程序：只有显式选了才传 --target。
+        # "" 必须**不传**（而不是传 "ww"）—— 否则「接着上次」续跑 ok-nte 时
+        # 会被悄悄改回 ok-ww（main.py 的 --target 是覆盖语义）。
+        tgt = TARGET_ARG.get(self.target_var.get().strip())
+        if tgt:
+            args += ["--target", tgt]
 
         self.log_text.delete("1.0", "end")
         self._last_status = {}
