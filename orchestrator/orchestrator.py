@@ -40,6 +40,14 @@ FAILED = "failed"
 # 而成因 (a) 完全正常。按 INV-30 报 UNKNOWN，把判断交给人。
 UNKNOWN = "unknown"
 
+# 「停住了」：ok-nte 的执行器被暂停，且零进展（FAULT #30）。
+# 具体成因：游戏窗口被最小化 ⇒ ok-nte 拿到哨兵坐标 (-32000,-32000) ⇒
+# 写下 `og.executor.pause pos_invalid` ⇒ **暂停执行器**。
+# 此时进程还在、终止标记永远不来，若只按「超时」处理会白烧半小时
+# 且归因错误（报「超时」而非「卡住」）。单独取值以便节点 9 与汇总
+# 能说清到底是「等太久」还是「它不动了」。
+STALLED = "stalled"
+
 # 退出码
 EXIT_OK = 0
 EXIT_CONFIG = 2       # 环境/前提不成立

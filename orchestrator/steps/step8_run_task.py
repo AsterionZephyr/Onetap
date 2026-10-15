@@ -55,7 +55,8 @@ from .. import watchdog as watchdog_mod
 from ..errors import GuardFailure
 from ..orchestrator import (
     CHANGE_THRESHOLD, CLICK_RETRIES, CLICK_RETRY_INTERVAL, COMPLETED, FAILED,
-    FREEZE_SECONDS, NAV_RETRIES, POLL_INTERVAL, TIMEOUT, TOTAL_TIMEOUT, UNKNOWN,
+    FREEZE_SECONDS, NAV_RETRIES, POLL_INTERVAL, STALLED, TIMEOUT, TOTAL_TIMEOUT,
+    UNKNOWN,
 )
 
 from . import context
@@ -447,6 +448,13 @@ NTE_GAME_WAIT_SECONDS = 120.0   # 等游戏进程出现的上限（实测 03:12:
 NTE_READABLE_SAMPLES = 3        # 需连续这么多次「可读」才算稳定
 NTE_SETTLE_POLL = 2.0           # 稳定检测的轮询间隔
 
+# FAULT #30：检测到「执行器暂停且零进展」后，再给它这么久自行恢复。
+# 实测恢复游戏窗口**有时**能让它继续（13s 后写 hwnd changed,connected:1），
+# **有时不能**（恢复后再度沉默）。所以先给宽限期，仍无进展才判定 STALLED。
+# 取 90s：足够容忍一次恢复尝试，又远小于 1800s 的兜底上限。
+NTE_STALL_GRACE_SECONDS = 90.0
+
+
 
 def frame_changed(before, after, log=None):
     """判断点击后画面是否真的变了；返回 (changed, 说明串)。
@@ -596,6 +604,7 @@ def wait_for_nte_completion(state, args, log, window_log=None):
     started = time.time()
     last_report = 0.0
     last_alive = True
+    stall_since = None
 
     while True:
         now = time.time()
@@ -608,6 +617,27 @@ def wait_for_nte_completion(state, args, log, window_log=None):
         alive = bool(window.running(program=programs_mod.NTE))
         last_alive = alive
         v, ev = window_log.verdict(still_running=alive)
+
+        # ⚠️ FAULT #30：执行器永久暂停时必须**提前**报出来，不能空等到超时。
+        # 游戏窗口被最小化时 ok-nte 写下 og.executor.pause pos_invalid(-32000,...)
+        # 然后停住：进程还在、终止标记永远不来 ⇒ 循环会一路轮询到
+        # --total-timeout（默认 1800s）才报 TIMEOUT，**白烧半小时且归因错误**。
+        # 这里改成：先等一个宽限期（给它自行恢复的机会，实测有时能恢复），
+        # 之后若仍无任何进展就直接判定为 STALLED 并说清原因。
+        paused, why = verdict_mod.nte_executor_paused(window_log.text())
+        if paused:
+            if stall_since is None:
+                stall_since = now
+                log(f"  [注意] {why}")
+                log(f"  [注意] 给它 {NTE_STALL_GRACE_SECONDS:.0f}s 自行恢复"
+                    f"（实测恢复窗口有时有效、有时无效）…")
+            elif now - stall_since > NTE_STALL_GRACE_SECONDS:
+                return STALLED, (f"ok-nte 执行器已暂停 {now - stall_since:.0f}s 无任何进展"
+                                 f"：{why}"), None
+        else:
+            if stall_since is not None:
+                log("  [OK] 执行器已恢复（继续等待）")
+            stall_since = None
 
         if v == verdict_mod.SUCCESS:
             # ⚠️ FAULT #27：**先让它自己收尾，别急着宣布完成**。
@@ -891,7 +921,11 @@ def body(args, state, log):
     # 所以让链条正常走完（节点 9 会自己判定「无需清理」），
     # 再由**人**看日志裁决 —— 而不是用退出码 3 把一个正常夜间流程标红。
     status = {"completed": "ok", "timeout": "timeout", "failed": "failed",
-              "unknown": "skipped"}.get(result, "failed")
+              "unknown": "skipped",
+              # FAULT #30：「停住了」不是超时 —— 它是**确定**的失败
+              # （执行器暂停、零进展），报 failed 让节点 9 走清理路径。
+              # 若报 timeout 会被当成「等太久」，归因错误。
+              "stalled": "failed"}.get(result, "failed")
     return (status,
             {"result": result, "detail": detail, "completion_frame": frame_path},
             f"{result}：{detail}")

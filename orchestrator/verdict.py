@@ -184,6 +184,67 @@ def nte_verdict(text, still_running=False):
     return UNKNOWN, ev + ["序列不完整且无终止标记"]
 
 
+# --- FAULT #30：执行器暂停（游戏窗口被最小化）-----------------------------
+#
+# ok-nte 在游戏窗口被最小化时写下这一行，然后**暂停自己的执行器**：
+#
+#     ERROR update_window_size hwnd_window:og.executor.pause \
+#           pos_invalid: (-32000, -32000, 0, 0)
+#
+# `-32000` 正是 win32.ICONIC_SENTINEL（最小化哨兵）。暂停后进程**还在**、
+# 终止标记**永远不来** ⇒ 只看「终止标记/进程存活」的等待循环必然空转到
+# --total-timeout 才报 TIMEOUT，**白烧半小时且归因错误**（报「超时」而非「卡住」）。
+#
+# ⚠️ **不能一见到 pos_invalid 就断定卡死**。实测 ok-script.2026-10-12.log：
+# 20:07:19 出现哨兵 pause，但 20:07:40 又跑了 FishingTask、20:11:22 正常
+# `ok:quit app` 退出 —— 它是**活过来的**（那次窗口被人手动最小化过）。
+# 所以判定要同时满足：哨兵 pause 出现过、且之后**既无业务行也无收尾动作**。
+NTE_EXECUTOR_PAUSE = r"og\.executor\.pause\s+pos_invalid:\s*\(\s*-32000\s*,\s*-32000"
+
+# 业务行：任务执行器真正在做事的证据。
+# ⚠️ 必须覆盖**所有**任务类，不能只写 Daily* —— 实测 10-12 那次跑的是
+# FishingTask（钓鱼），只用 Daily 会把它误判成「没干活」。
+_NTE_BIZ_RE = re.compile(r"TaskExecutor\s+\w+Task[:：]"
+                         r"|开始任务|任务完成|found Labels|info_set (轮次|当前阶段)")
+_NTE_NOISE_RE = re.compile(r"update_window_size|hwnd_window|connected:"
+                           r"|do_update_window_size")
+# 收尾动作：出现即说明进程在正常收场，不是卡死
+_NTE_EXIT_RE = re.compile(r"ok:quit app|Executor destroy|Attempting to terminate process"
+                          r"|handler stopping")
+
+
+def nte_executor_paused(text):
+    """判断 ok-nte 是否**停在那里不动了**（执行器暂停且无进展）。
+
+    返回 (paused, evidence)。`paused` 为 True 表示：出现过最小化哨兵导致的
+    `og.executor.pause`，且**之后再没有任何业务行、也没有任何收尾动作**。
+
+    这是 FAULT #30 的判据；详见上方注释里 10-12 那条反证。
+    """
+    pauses = list(re.finditer(NTE_EXECUTOR_PAUSE, text))
+    if not pauses:
+        return False, ""
+
+    tail = text[pauses[-1].end():]
+    biz = 0
+    exit_actions = 0
+    for line in tail.splitlines():
+        if not line.strip():
+            continue
+        if _NTE_BIZ_RE.search(line) and not _NTE_NOISE_RE.search(line):
+            biz += 1
+        if _NTE_EXIT_RE.search(line):
+            exit_actions += 1
+
+    paused = (biz == 0 and exit_actions == 0)
+    if paused:
+        return True, (f"检出执行器暂停（pos_invalid 最小化哨兵）{len(pauses)} 次，"
+                      f"之后无业务日志、无收尾动作 —— 游戏窗口很可能被最小化，"
+                      f"ok-nte 停住了（FAULT #30）")
+    return False, (f"检出执行器暂停 {len(pauses)} 次，但之后仍有业务行 {biz} / "
+                   f"收尾 {exit_actions} —— 已自行恢复，不算卡死")
+
+
 class LogWindow:
     """以**文件字节偏移**界定「本次运行」的日志窗口。
 

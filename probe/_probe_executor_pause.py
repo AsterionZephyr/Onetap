@@ -196,7 +196,41 @@ else:
     if recovered_real == 0:
         print("  (注：10-12 日志不在，跳过该回归用例)")
 
-# ---- 6. live：当前窗口状态 ----
+# ---- 6. 产品接口：orchestrator.verdict.nte_executor_paused ----
+print("\n--- 产品判据 verdict.nte_executor_paused ---")
+from orchestrator import verdict as vmod  # noqa: E402
+
+PAUSE_LINE = ("2026-10-16 03:34:46,400 ERROR update_window_size hwnd_window:"
+              "og.executor.pause pos_invalid: (-32000, -32000, 0, 0) ")
+NOISE_LINE = ("2026-10-16 03:43:28,132 INFO update_window_size hwnd_window:"
+              "hwnd changed,connected:1")
+BIZ_LINE = "2026-10-16 03:35:00,000 INFO TaskExecutor DailyRoutineTask:任务完成: 异象界域"
+EXIT_LINE = "2026-10-16 03:36:00,000 INFO MainThread ok:quit app"
+
+got, why = vmod.nte_executor_paused(PAUSE_LINE + "\n" + NOISE_LINE)
+check("✓ 暂停后彻底沉默 ⇒ 判为停住", got is True, why[:60])
+
+got, why = vmod.nte_executor_paused(PAUSE_LINE + "\n" + BIZ_LINE)
+check("✓ 暂停后又干活 ⇒ 不判停住", got is False, why[:60])
+
+got, why = vmod.nte_executor_paused(PAUSE_LINE + "\n" + EXIT_LINE)
+check("✓ 暂停后正常收尾 ⇒ 不判停住", got is False, why[:60])
+
+got, why = vmod.nte_executor_paused(BIZ_LINE)
+check("✓ 无暂停记录 ⇒ 不判停住", got is False)
+
+# 常量与接线
+from orchestrator import orchestrator as orch_mod  # noqa: E402
+check("✓ orchestrator.STALLED 已定义", getattr(orch_mod, "STALLED", None) == "stalled")
+step8 = (Path(__file__).resolve().parent.parent / "orchestrator" / "steps"
+         / "step8_run_task.py").read_text(encoding="utf-8")
+check("✓ 节点 8 已接线 nte_executor_paused", "nte_executor_paused" in step8)
+check("✓ 节点 8 有 STALLED 宽限常量", "NTE_STALL_GRACE_SECONDS" in step8)
+check("✓ STALLED 映射为 failed（不是 timeout）",
+      '"stalled": "failed"' in step8,
+      "停住是确定失败，不该混进「等太久」")
+
+# ---- 7. live：当前窗口状态 ----
 if "--live" in sys.argv:
     print("\n--- live：当前窗口状态 ---")
     from orchestrator import win32, watchdog, programs
