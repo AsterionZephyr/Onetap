@@ -344,6 +344,7 @@ ORDER = ["ok-ww", "ok-nte"]                 # 编排顺序（用户指定：ok-w
 | ~~多程序串联~~ | ✅ **已实现**：`--target both`（ok-ww → ok-nte 各跑一轮），见 §9 |
 | ~~ok-nte 收尾抢跑~~ | ✅ **已修**（FAULT #27）：见完成标记后给有界 settle 窗口，等它自己关游戏 |
 | **游戏 launcher 残留** | ok-nte 只关游戏本体 `HTGame.exe`，**留下 `NTEGame.exe`**（launcher，7~9 个窗口含托盘图标）。节点 9 已在 `completed` 分支报出，但按 Q3 **不主动杀**。⚠️ **清理时必须显式用跨程序入口** `watchdog.force_close(None, all_programs=True)` —— `force_close(None)` 的 `None` **不等于「全部」**，会回落到 `programs.DEFAULT`（ok-ww），只按 `Client-Win64-Shipping.exe` 查，然后报「游戏进程已全部退出」（**为真但误导**，见 FAULT #32） |
+| ~~「今日任务已完成」残留需人工收尾~~ | ✅ **已自动收尾**（2026-10-16）：用户裁定「遇到『每日任务已做完导致 ok-ww 失败且进程/游戏不退出』时**自行手动关闭，不询问用户**」。节点 9 的 `unknown` 分支原先只看 `window.running(prog)`（**目标程序自己**），而该情形里 ok-ww 进程**恰恰是已经退出的那一个**，留下的是**游戏** ⇒ 旧代码打印「无残留，无需清理」**而游戏仍在跑**。现改为**两者都查**，有游戏残留就走 `watchdog.force_close`。⚠️ 注意**不能只靠 `run_cleanup`**：它按 `process_prefix` 只杀目标程序目录下的进程，游戏根本不在那里 |
 | **通用唯一性 API** | 把「全帧所有 >=0.85 位置」做成标准接口，任何定位都必须过这一关 |
 | **性能** | 当前 `all_hits` 是 Python 逐点循环，1520×1020 全帧扫描很慢。正式实现应用 numpy 向量化（`stride_tricks` + 矩阵相关） |
 
