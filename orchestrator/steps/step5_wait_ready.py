@@ -26,12 +26,13 @@ def extra_args(ap):
 
 
 def body(args, state, log):
+    prog = context.resolve_program(state, args, log=log)
     hwnd = context.require_hwnd(state, log=log)
     log(f"  等待就绪（最多 {args.timeout:.0f}s；"
-        f"要求标题完整 + 尺寸 >= {window.READY_MIN_WIDTH}x{window.READY_MIN_HEIGHT}"
+        f"要求标题完整 + 尺寸 >= {prog.min_width}x{prog.min_height}"
         f" + 连续 {window.STABLE_SAMPLES} 次采样稳定）")
     try:
-        st = window.wait_for_ready(hwnd, log=log, timeout=args.timeout)
+        st = window.wait_for_ready(hwnd, program=prog, log=log, timeout=args.timeout)
     except DiscoveryFailure as e:
         log("")
         log(str(e))

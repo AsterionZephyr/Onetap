@@ -1,9 +1,8 @@
 # 编排框架 · 使用手册
 
 > **面向使用者与维护者**。本文回答：怎么跑、跑什么、出问题看哪里。
-> 设计依据与实测证据见 [FRAMEWORK.md](./FRAMEWORK.md)（不变量）、
-> [COMPLETION-VERDICT.md](./COMPLETION-VERDICT.md)、[CLEANUP.md](./CLEANUP.md)、
-> [OK-NTE-ADAPTATION.md](./OK-NTE-ADAPTATION.md)。
+> 设计依据与实测证据见 [FRAMEWORK.md](./FRAMEWORK.md)（不变量 + §0.1 目标程序差异一览）、
+> [COMPLETION-VERDICT.md](./COMPLETION-VERDICT.md)、[CLEANUP.md](./CLEANUP.md)。
 
 ---
 
@@ -378,11 +377,10 @@ ACCEPT = 0.90                 # 匹配阈值
 
 | 文档 | 内容 |
 | --- | --- |
-| [FRAMEWORK.md](./FRAMEWORK.md) | **52 条不变量**与实测证据（**总纲**） |
+| [FRAMEWORK.md](./FRAMEWORK.md) | **不变量**与实测证据（**总纲**，含 §0.1 两程序差异一览） |
 | [CONTEXT.md](./CONTEXT.md) | 术语表 |
 | [COMPLETION-VERDICT.md](./COMPLETION-VERDICT.md) | 完成判据（Q1）与两次自纠 |
 | [CLEANUP.md](./CLEANUP.md) | 清理策略（Q3） |
-| [OK-NTE-ADAPTATION.md](./OK-NTE-ADAPTATION.md) | ok-nte 适配（Q2） |
 | [ORCHESTRATION.md](./ORCHESTRATION.md) | 编排实现记录 |
 | [HANDOFF.md](./HANDOFF.md) | 早期交接书 |
 | [docs/adr/0001-blackbox-real-cursor.md](./docs/adr/0001-blackbox-real-cursor.md) | 架构决策：黑盒 + 真实光标 |

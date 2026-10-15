@@ -41,7 +41,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # 链条定义：节点号 -> (模块名, 中文名, 一句说明)
 CHAIN = [
     ("1", "step1_check_admin", "提权检查", "非管理员直接中止（INV-7）"),
-    ("2", "step2_launch", "启动 ok-ww.exe", "拉起第一层，它自行启动第二层"),
+    ("2", "step2_launch", "启动目标程序", "拉起第一层，它自行启动第二层"),
     ("4", "step4_wait_second_layer", "等待第二层窗口", "Qt 窗口持有者出现"),
     ("5", "step5_wait_ready", "等待窗口就绪", "标题完整 + 尺寸达标 + 采样稳定"),
     ("6", "step6_first_frame", "抓首帧并校验", "INV-1/13/17/22 + 身份校验"),
@@ -94,6 +94,12 @@ def build_parser():
                    help="原样透传给**每一个** step 的额外参数，可重复")
     p.add_argument("--show-cmd", action="store_true",
                    help="打印每节的完整命令行（便于手工复现）")
+    # --- 目标程序 ---------------------------------------------------------
+    # ⚠️ 默认 **None**（不是 "ww"）：省略时跟随 state.json 里的记录，
+    # 这样 `--resume` 续跑不会把 ok-nte 的运行悄悄改回 ok-ww。
+    p.add_argument("--target", default=None, choices=["ww", "nte"],
+                   help="目标程序：ww=ok-ww（默认）/ nte=ok-nte。"
+                        "开跑时写入 state.json，全链共享")
 
     # --- 透传给特定节点的参数（见 PASSTHROUGH）-----------------------------
     # 这些参数只在它们所属的节点上生效，主控自己不做处理，只是转发。
@@ -185,9 +191,26 @@ def main(argv=None):
     os.makedirs(run_dir, exist_ok=True)
     log = context.Log(os.path.join(run_dir, "chain.log"))
 
+    # --- 目标程序：写入 state.json，**全链共享** -------------------------
+    # 放在开跑之初（而不是每节命令行）：每节都是独立子进程，
+    # state.json 是它们唯一的共享通道；写一次，8 个节点都读得到。
+    state = context.RunState.load(run_dir, must_exist=False)
+    prog = context.resolve_program(state, args, log=log)
+    if args.target:
+        # 显式 --target 覆盖 state.json（允许改指另一个程序重跑）
+        last = state.get("program")
+        if last and last != prog.key:
+            log(f"[目标程序] 由 {last} 改为 {prog.key}（--target 覆盖）")
+        state.set("program", prog.key)
+        state.save()
+    elif not state.get("program"):
+        state.set("program", prog.key)
+        state.save()
+
     log("=" * 74)
     log("断点式编排主控")
     log(f"运行目录 {run_dir}")
+    log(f"目标程序 {prog.display}（{prog.key}）")
     log(f"节点序列 {ids}   dry_run={args.dry_run}")
     log(f"解释器   {args.python}")
     log("=" * 74)
@@ -196,14 +219,15 @@ def main(argv=None):
         mark = ">>" if sid in ids else "  "
         log(f" {mark} [{sid}] {name:14s} {why}")
 
-    state = context.RunState.load(run_dir, must_exist=False)
     if args.dry_run:
         state.set("dry_run", True)
         state.save()
 
     # --- 前置清理 -----------------------------------------------------
     if args.pre_clean:
-        log("\n[前置清理] 独占式前提：清掉 ok-ww 残留进程")
+        # ⚠️ 清理必须针对**本次的目标程序**：清理 ok-ww 却跑 ok-nte 会
+        # 把没在用的那个程序的残留当成本次前提，且真正该清的没清。
+        log(f"\n[前置清理] 独占式前提：清掉 {prog.display} 残留进程")
         cmd = [args.python, "-m", "orchestrator.steps.step9_cleanup",
                "--run-dir", run_dir, "--force"]
         if args.dry_run:

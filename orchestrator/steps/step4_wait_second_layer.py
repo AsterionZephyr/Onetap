@@ -35,6 +35,7 @@ def extra_args(ap):
 
 
 def body(args, state, log):
+    prog = context.resolve_program(state, args, log=log)
     if args.adopt_hwnd:
         info = window.win32.window_state(args.adopt_hwnd)
         if info is None:
@@ -45,17 +46,17 @@ def body(args, state, log):
             f"{info['width']}x{info['height']}")
         return "ok", {"hwnd": args.adopt_hwnd, "adopted": True}, "手工指定 hwnd"
 
-    log(f"  等待第二层 Qt 窗口（最多 {args.timeout:.0f}s）")
-    log("  ok-ww 第一层会自行放行，约 21 秒；本框架**不点击任何东西**")
+    log(f"  等待 {prog.display} 第二层 Qt 窗口（最多 {args.timeout:.0f}s）")
+    log(f"  {prog.display} 第一层会自行放行；本框架**不点击任何东西**")
     try:
-        info = window.wait_for_second_layer(timeout=args.timeout, log=log)
+        info = window.wait_for_second_layer(prog, timeout=args.timeout, log=log)
     except DiscoveryFailure as e:
         log("")
         log(str(e))
-        alive = window.okww_running()
+        alive = window.running(prog)
         if not alive:
             return ("failed", {"hwnd": None},
-                    "没有 ok-ww 进程在跑 —— 第二层不可能出现")
+                    f"没有 {prog.display} 进程在跑 —— 第二层不可能出现")
         return "failed", {"hwnd": None}, "第二层未在超时内出现"
 
     state.set("hwnd", info["hwnd"])

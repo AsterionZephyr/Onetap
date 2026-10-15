@@ -298,9 +298,15 @@ def rediscover_hwnd(state, log=None):
 
     节点 4 之后每个要用窗口的 step 都调用它，而不是相信 state.json 里的旧值。
     回退顺序：Qt 窗口 -> 任意非 Tauri 窗口 -> state.json 里的记录值。
+
+    ⚠️ 发现的是**本程序的目标窗口**（由 `program_key` 决定），
+    不是写死的 ok-ww —— 否则 ok-nte 流程会去找 ok-ww 的窗口，
+    找不到就回退到 state.json 里的旧 hwnd，**静默操作另一个程序**。
     """
+    from .. import programs as programs_mod
     from .. import window
-    info = window.find_okww_window()
+    prog = programs_mod.get(program_key(state))
+    info = window.find_window(program=prog)
     if info:
         if log and state.get("hwnd") not in (None, info["hwnd"]):
             log(f"  hwnd 重新发现：{state.get('hwnd')} -> {info['hwnd']}（INV-14）")
@@ -309,17 +315,83 @@ def rediscover_hwnd(state, log=None):
         return info["hwnd"]
     old = state.get("hwnd")
     if log:
-        log(f"  [警告] 标题正则未发现窗口，回退到 state.json 记录的 hwnd={old}")
+        log(f"  [警告] 标题正则未发现 {prog.display} 窗口，"
+            f"回退到 state.json 记录的 hwnd={old}")
     return old
 
 
 def require_hwnd(state, log=None):
     hwnd = rediscover_hwnd(state, log=log)
     if not hwnd:
+        from .. import programs as programs_mod
+        prog = programs_mod.get(program_key(state))
         raise StateError(
-            "没有可用的窗口句柄：标题正则没发现 ok-ww 窗口，state.json 里也没有记录。\n"
-            "  => 先跑 step4（等待第二层），或用 --adopt-hwnd 手工指定。")
+            f"没有可用的窗口句柄：标题正则没发现 {prog.display} 窗口，"
+            f"state.json 里也没有记录。\n"
+            f"  => 先跑 step4（等待第二层），或确认 --target 指定正确"
+            f"（当前 {prog.key}）。")
     return hwnd
+
+
+def program_key(state=None, args=None):
+    """确定**本次运行的目标程序**（`"ww"` / `"nte"`）。
+
+    优先级（从高到低）——
+
+      1. `state.json` 里的 `program`（主控在开跑时写一次，**全链共享**）
+      2. `--target` 命令行（**手工单跑**某个 step 时用）
+      3. 默认 `programs.DEFAULT`（= ok-ww，保持既有调用方行为不变）
+
+    ## 为什么程序名要放在 state.json 而不是每节命令行
+
+    每一节都是**独立子进程**（`main.py` 用 subprocess 拉起），命令行只传
+    `--run-dir`。若把程序名放命令行，就得给 8 个节点逐一加参数、并在
+    `PASSTHROUGH` 里登记；放 state.json 则**一次写入、全链可见**，
+    且「同一个运行目录必属同一个程序」这个事实**天然成立**（不会串味）。
+
+    ## 为什么不是「自动探测」
+
+    `programs.detect()` 能按进程反推，但它**会猜**：两个程序同时开着时，
+    探测结果取决于枚举顺序。编排是**批量、无人值守**的，猜错会静默操作
+    另一个程序（正是 FAULT #12 那一类失效）。故这里只认**显式指定**，
+    探测只作为**交叉校验**（见 `resolve_program`）。
+    """
+    from .. import programs as programs_mod
+    if state is not None:
+        key = state.get("program")
+        if key:
+            try:
+                return programs_mod.get(key).key
+            except KeyError:
+                # 配置写错 ⇒ 响亮报错，**不回落默认**（否则静默跑另一个程序）
+                raise StateError(
+                    f"state.json 里的 program={key!r} 不是已知程序；"
+                    f"已知：{sorted(programs_mod.BY_KEY)}")
+    tgt = getattr(args, "target", None) if args is not None else None
+    if tgt:
+        return programs_mod.get(tgt).key
+    return programs_mod.DEFAULT.key
+
+
+def resolve_program(state=None, args=None, log=None):
+    """取本程序的 Program 记录，并**交叉校验**实际进程（不一致就告警）。
+
+    交叉校验的意义：`--target nte` 却跑着 ok-ww，是**静默错配**的温床
+    （点对了坐标、抓对了帧，但操作的是另一个程序）。这里只**告警不阻止**
+    —— 因为「目标程序尚未启动」是合法状态（节点 2 就发生在启动之前）。
+    """
+    from .. import programs as programs_mod
+    from .. import window as window_mod
+    key = program_key(state, args)
+    prog = programs_mod.get(key)
+    if log:
+        others = [p for p in programs_mod.ALL if p.key != prog.key
+                  and window_mod.running(p)]
+        if others:
+            log(f"  [警告] 目标程序是 {prog.display}，但同时发现"
+                f"{'、'.join(p.display for p in others)} 在运行 —— "
+                f"请确认操作对象（本编排只操作 {prog.display}）")
+    return prog
 
 
 # ------------------------------------------------------------ 命令行共用
@@ -333,6 +405,11 @@ def add_common_args(ap):
                     help="只做校验与定位，不点击、不杀进程")
     ap.add_argument("--new-run", action="store_true",
                     help="强制新建一个运行目录（否则沿用 --run-dir / 最近一次）")
+    # --target 只对**手工单跑**某个 step 时有用：正常链路里程序名已写在
+    # state.json（见 program_key）。默认 None 表示「跟随 state.json」。
+    ap.add_argument("--target", default=None, choices=["ww", "nte"],
+                    help="目标程序（ww=ok-ww / nte=ok-nte）。"
+                         "省略时跟随 state.json；手工单跑某节时用它指定")
     return ap
 
 

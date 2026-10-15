@@ -14,30 +14,42 @@ import re
 import subprocess
 import time
 
+from . import programs as programs_mod
 from . import win32
 from .errors import DiscoveryFailure, GuardFailure
 
-# 标题正则（INV-5：绝不用精确相等）。
-# 真实标题：`OK-WW v3.6.7 China  - OK-WW`（注意两个空格）。
-# 第一层标题是小写 `ok-ww`，故正则必须不区分大小写。
-OKWW_TITLE_RE = r"(?i)OK-WW"
+# --- 目标程序（ok-ww / ok-nte）---------------------------------------------
+#
+# ⚠️ 本模块原先把 ok-ww 的标题正则、exe 路径、工作目录、进程名、窗口类前缀
+# **全部硬编码**在自己这里。接入 ok-nte 时若复制粘贴，会得到两份各自漂移的
+# 常量 —— 而漂移是**静默**的（路径写错只表现为「找不到进程」，不报错）。
+# 故这些值**一律**从 `orchestrator.programs` 取，本模块只留逻辑。
+#
+# 下面这些模块级名字**保留**为兼容别名：外部（selftest / 历史脚本）曾直接
+# 引用 `window.OKWW_TITLE_RE` 之类；别名指向默认程序（ok-ww），行为不变。
+_DEFAULT = programs_mod.DEFAULT
 
-# 第二层启动期间的标题是裸 `OK-WW`，就绪后才是完整标题。
-READY_TITLE_RE = r"(?i)OK-WW\s+v[\d.]+\s+\w+\s+-\s+OK-WW"
+OKWW_TITLE_RE = _DEFAULT.loose_title_re
+READY_TITLE_RE = _DEFAULT.ready_title_re
+OKWW_WINDOW_CLASS_PREFIX = programs_mod.QT_CLASS_PREFIX
+OKWW_EXE = _DEFAULT.exe
+OKWW_DIR = _DEFAULT.root_dir
 
-OKWW_EXE = r"E:\TOOLS\ScriptsGames\ok-ww\ok-ww.exe"
-OKWW_DIR = r"E:\TOOLS\ScriptsGames\ok-ww"
+# 排除自家窗口：编排 GUI 是 Tk，驱动终端是 ConsoleWindowClass，
+# 但**最可靠的判据是 PID** —— 本进程（及其父）自己的窗口永远不是目标程序。
+_SELF_PIDS = set()
 
-# 窗口就绪的**结构**判据（本次实机新增）。
+# 窗口就绪的**结构**判据（默认程序 ok-ww 的值；ok-nte 见 programs.NTE）。
 #
 # 为什么不能只看「rect 连续稳定」：第二层刚启动时窗口是 625x625 的一个**空壳**，
 # 尺寸照样稳定，抓出来是纯色（实测 1 色），INV-13 拦下 —— 也就是「稳定」不等于
 # 「可用」。就绪必须同时满足：
 #   - 标题已是完整形态（含版本号）
-#   - 尺寸达到可用下限（本机实测正常窗口 1458x800 ~ 1875x1250）
+#   - 尺寸达到可用下限（ok-ww 本机实测正常窗口 1458x800 ~ 1875x1250）
 #   - 尺寸连续采样稳定
-READY_MIN_WIDTH = 1000
-READY_MIN_HEIGHT = 700
+READY_MIN_WIDTH = _DEFAULT.min_width
+READY_MIN_HEIGHT = _DEFAULT.min_height
+
 
 # 就绪判定：连续采样次数与间隔
 STABLE_SAMPLES = 3
@@ -63,48 +75,119 @@ def check_admin(log=None):
         log("  [OK] 提权检查通过")
 
 
-def find_okww_window(require_ready=False):
-    """节点 4：按标题正则发现窗口持有者。
+def _self_pids():
+    """返回「本编排自己」的 PID 集合（当前进程 + 父进程）。
 
-    同时排除第一层的 Tauri 外壳（class `Tauri Window`）——
-    它持有的是启动器窗口，不是真正干活的 Qt 窗口。
+    为什么要父进程：GUI 通过 `python -m gui` 起子进程跑节点，
+    驱动终端也可能是父进程；把它们一并排除，避免**自家窗口**被当成 ok-ww。
     """
-    pattern = READY_TITLE_RE if require_ready else OKWW_TITLE_RE
+    global _SELF_PIDS
+    if _SELF_PIDS:
+        return _SELF_PIDS
+    _SELF_PIDS = {os.getpid()}
+    try:
+        import ctypes
+        from ctypes import wintypes as wt
+        k = ctypes.windll.kernel32
+        # 伪句柄 -1 的陷阱：这些 API 返回真句柄，可以正常用（对比 win32.is_admin）
+        k.CreateToolhelp32Snapshot.restype = wt.HANDLE
+        snap = k.CreateToolhelp32Snapshot(0x00000002, 0)   # TH32CS_SNAPPROCESS
+        if snap and snap != wt.HANDLE(-1).value:
+            class PE32(ctypes.Structure):
+                _fields_ = [("dwSize", wt.DWORD), ("cntUsage", wt.DWORD),
+                            ("th32ProcessID", wt.DWORD),
+                            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                            ("th32ModuleID", wt.DWORD), ("cntThreads", wt.DWORD),
+                            ("th32ParentProcessID", wt.DWORD),
+                            ("pcPriClassBase", ctypes.c_long), ("dwFlags", wt.DWORD),
+                            ("szExeFile", ctypes.c_char * 260)]
+            pe = PE32()
+            pe.dwSize = ctypes.sizeof(PE32)
+            me = os.getpid()
+            parent = None
+            if k.Process32First(snap, ctypes.byref(pe)):
+                while True:
+                    if pe.th32ProcessID == me:
+                        parent = pe.th32ParentProcessID
+                        break
+                    if not k.Process32Next(snap, ctypes.byref(pe)):
+                        break
+            k.CloseHandle(snap)
+            if parent:
+                _SELF_PIDS.add(parent)
+    except Exception:
+        pass          # 拿不到父进程不影响主逻辑：至少排除了自己
+    return _SELF_PIDS
+
+
+def find_window(program=None, require_ready=False):
+    """节点 4：按标题正则发现**目标程序**的窗口持有者。
+
+    程序由 `program` 指定（Program 实例或 key `"ww"`/`"nte"`）；默认 ok-ww，
+    与既有调用方行为一致。
+
+    三重排除（FAULT #12 逼出来的，缺一不可）：
+      1. 排除第一层的 Tauri 外壳（class `Tauri Window`）—— 它持有的是
+         启动器窗口，不是真正干活的 Qt 窗口。
+         实测本机 `Clash Verge` 也是这个类，故此排除是**载荷性**的。
+      2. **排除自家进程的窗口**（本进程 + 父进程 PID）。本编排的 GUI 标题
+         是「ok-ww 断点式编排 — GUI」，被裸正则 `OK-WW` 命中；ok-ww 退出后
+         它会被误判为 ok-ww，而它**能成功抓帧**（不触发任何不变量）
+         ⇒ 静默把自己的控制面板当目标。
+      3. **窗口类必须是 Qt 系**。ok-ww 的持有者实测恒为
+         `Qt6111QWindowIcon`；ok-nte 亦为 Qt。不是 Qt 就一定不是目标。
+         注意：`require_ready=False`（第二层刚起、标题尚未成完整形态）时
+         也成立 —— 第二层一样是 Qt 窗口。
+
+    返回 None 表示**确实没找到**，绝不返回一个「像目标程序的别的东西」。
+    """
+    prog = programs_mod.get(program)
+    pattern = prog.ready_title_re if require_ready else prog.loose_title_re
+    self_pids = _self_pids()
     found = [w for w in win32.find_windows(pattern)
-             if w[3] != "Tauri Window"]
+             if w[3] != programs_mod.TAURI_CLASS
+             and w[1] not in self_pids
+             and w[3].startswith(programs_mod.QT_CLASS_PREFIX)]
     if not found:
         return None
-    # 窗口持有者是 Qt 自绘窗口
-    for hwnd, pid, title, cls in found:
-        if cls.startswith("Qt"):
-            return {"hwnd": hwnd, "pid": pid, "title": title, "class": cls}
     hwnd, pid, title, cls = found[0]
-    return {"hwnd": hwnd, "pid": pid, "title": title, "class": cls}
+    return {"hwnd": hwnd, "pid": pid, "title": title, "class": cls,
+            "program": prog.key}
+
+
+def find_okww_window(require_ready=False):
+    """ok-ww 专用入口（兼容既有调用方）。"""
+    return find_window(programs_mod.WW, require_ready=require_ready)
+
+
+def running(program=None):
+    """目标程序的两层进程是否还有活的（按工作目录前缀归属）。"""
+    prog = programs_mod.get(program)
+    procs = win32.list_processes(prog.process_names)
+    return [(name, pid, exe) for name, pid, exe in procs
+            if prog.owns_process(exe)]
 
 
 def okww_running():
-    """ok-ww 的两层进程是否还有活的。"""
-    procs = win32.list_processes(["pythonw.exe", "ok-ww.exe"])
-    root = os.path.normcase(os.path.abspath(OKWW_DIR))
-    alive = []
-    for name, pid, exe in procs:
-        if exe and os.path.normcase(os.path.abspath(exe)).startswith(root):
-            alive.append((name, pid, exe))
-    return alive
+    """ok-ww 专用入口（兼容既有调用方）。"""
+    return running(programs_mod.WW)
 
 
-def launch_okww(exe=OKWW_EXE, cwd=None, log=None):
-    """节点 2：启动 ok-ww.exe（第一层）。
+def launch(program=None, exe=None, cwd=None, log=None):
+    """节点 2：启动目标程序的第一层。
 
     第一层会自行检查更新并启动第二层；**全程无需点击**（T-4 / §2.1）。
+    ok-ww 第一层约 10 秒后自行退出、ok-nte 同理 —— 真正持窗口的是第二层。
     """
+    prog = programs_mod.get(program)
+    exe = exe or prog.exe
     if not os.path.isfile(exe):
-        raise DiscoveryFailure(f"ok-ww 可执行文件不存在：{exe}")
+        raise DiscoveryFailure(f"{prog.display} 可执行文件不存在：{exe}")
 
-    existing = okww_running()
+    existing = running(prog)
     if existing:
         if log:
-            log(f"  ok-ww 已在运行：{existing}")
+            log(f"  {prog.display} 已在运行：{existing}")
         return False
 
     if log:
@@ -113,25 +196,32 @@ def launch_okww(exe=OKWW_EXE, cwd=None, log=None):
     return True
 
 
-def wait_for_second_layer(timeout=SECOND_LAYER_TIMEOUT, log=None):
-    """节点 4：等待第二层的窗口持有者出现（pythonw.exe 持有 Qt 窗口）。
+def launch_okww(exe=OKWW_EXE, cwd=None, log=None):
+    """ok-ww 专用入口（兼容既有调用方）。"""
+    return launch(programs_mod.WW, exe=exe, cwd=cwd, log=log)
 
-    实测时间线（全程零点击）：pythonw 21.5s -> Qt 窗口 25.2s -> ok-ww.exe 约 27s 消失。
+
+def wait_for_second_layer(program=None, timeout=SECOND_LAYER_TIMEOUT, log=None):
+    """节点 4：等待第二层的窗口持有者出现。
+
+    实测时间线（ok-ww，全程零点击）：
+    pythonw 21.5s -> Qt 窗口 25.2s -> ok-ww.exe 约 27s 消失。
     """
+    prog = programs_mod.get(program)
     deadline = time.time() + timeout
     while time.time() < deadline:
-        info = find_okww_window()
-        if info and info["class"].startswith("Qt"):
+        info = find_window(prog)
+        if info and info["class"].startswith(programs_mod.QT_CLASS_PREFIX):
             if log:
                 log(f"  第二层窗口出现 hwnd={info['hwnd']} pid={info['pid']}")
             return info
         time.sleep(1.0)
     raise DiscoveryFailure(
-        f"等待 {timeout:.0f} 秒仍未出现第二层 Qt 窗口。\n"
-        f"  当前 ok-ww 进程：{okww_running() if log else '(略)'}")
+        f"等待 {timeout:.0f} 秒仍未出现第二层 Qt 窗口（{prog.display}）。\n"
+        f"  当前 {prog.display} 进程：{running(prog) if log else '(略)'}")
 
 
-def wait_for_ready(hwnd, log=None, timeout=READY_TIMEOUT,
+def wait_for_ready(hwnd, program=None, log=None, timeout=READY_TIMEOUT,
                    samples=STABLE_SAMPLES, interval=STABLE_INTERVAL):
     """节点 5：等待窗口就绪。
 
@@ -141,6 +231,7 @@ def wait_for_ready(hwnd, log=None, timeout=READY_TIMEOUT,
     625x625 的空壳，尺寸同样稳定，抓出来是纯色，要靠 INV-13 才发现不对。
     与其在抓帧阶段失败，不如把「可用」的条件前置到就绪判定里。
     """
+    prog = programs_mod.get(program)
     deadline = time.time() + timeout
     last = None
     stable = 0
@@ -157,11 +248,11 @@ def wait_for_ready(hwnd, log=None, timeout=READY_TIMEOUT,
             last, stable = None, 0
             continue
 
-        info = find_okww_window()
+        info = find_window(prog)
         title = info["title"] if info else ""
-        title_ready = bool(re.search(READY_TITLE_RE, title))
-        size_ready = (state["width"] >= READY_MIN_WIDTH
-                      and state["height"] >= READY_MIN_HEIGHT)
+        title_ready = prog.title_matches(title, ready=True)
+        size_ready = (state["width"] >= prog.min_width
+                      and state["height"] >= prog.min_height)
 
         sig = (state["left"], state["top"], state["width"], state["height"], title)
         stable = stable + 1 if sig == last else 1
@@ -183,9 +274,9 @@ def wait_for_ready(hwnd, log=None, timeout=READY_TIMEOUT,
         time.sleep(interval)
 
     raise DiscoveryFailure(
-        f"等待 {timeout:.0f} 秒窗口仍未就绪。\n"
-        f"  => 窗口可能停在应用更新页且尺寸未达下限（{READY_MIN_WIDTH}x"
-        f"{READY_MIN_HEIGHT}）。\n"
+        f"等待 {timeout:.0f} 秒窗口仍未就绪（{prog.display}）。\n"
+        f"  => 窗口可能停在应用更新页且尺寸未达下限（{prog.min_width}x"
+        f"{prog.min_height}）。\n"
         f"  => 本次实机观察：首次启动会停在更新页，第二层同时也在运行；"
         f"把窗口拉大或点掉更新页后重试。")
 

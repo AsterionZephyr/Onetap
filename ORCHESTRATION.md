@@ -2,7 +2,7 @@
 
 > 用户目标：**按顺序启动这些程序完成任务**。ok-ww 先运行，然后 ok-nte。
 > **不检查游戏状态**（用户明确要求）。
-> 相关：[HANDOFF.md](./HANDOFF.md) §9 编排设计要点、[FRAMEWORK.md](./FRAMEWORK.md)、[OK-NTE-ADAPTATION.md](./OK-NTE-ADAPTATION.md)
+> 相关：[HANDOFF.md](./HANDOFF.md) §9 编排设计要点、[FRAMEWORK.md](./FRAMEWORK.md)（含 §0.1 两程序差异一览）
 
 ---
 
@@ -90,7 +90,7 @@
 | --- | --- |
 | ~~完成判定的可靠依据~~ | ✅ **已解决**：见 [COMPLETION-VERDICT.md](./COMPLETION-VERDICT.md)。**以 ok-ww 任务日志的阶段序列裁决**（`probe/ww_verdict.py`），不再依赖进程消失 |
 | ~~失败/超时的清理策略~~ | ✅ **已解决**：见 [CLEANUP.md](./CLEANUP.md)。**按进程血缘**强制清理（`probe/cleanup.py`），已接入编排 |
-| ~~ok-nte 的编排接入~~ | ✅ **已解决**：ok-nte 端到端跑通，见 [OK-NTE-ADAPTATION.md](./OK-NTE-ADAPTATION.md) §8 |
+| ~~ok-nte 的编排接入~~ | ✅ **已解决**：ok-nte 端到端跑通，见 [FRAMEWORK.md](./FRAMEWORK.md) §0.1 与 §3.8 |
 | **导航的通用化** | 目前按"图标列第 N 簇"推导，应改为"配置目标图标模板" |
 | **游戏进程遗留** | 超时后游戏可能仍在运行；当前 `kill_game=False`（默认不动），需用户决策 |
 | **鼠标争夺** | ⚠️ 实测 **ok-ww 会自己移动鼠标**（日志 125 处 `MouseResetTask:move mouse back`），编排点击后若依赖光标位置需重新确认 |

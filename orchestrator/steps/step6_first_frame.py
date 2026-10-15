@@ -10,7 +10,19 @@
 
 ⚠️ 本节点是「抓到别的窗口」这类事故的唯一闸门。开发中实际发生过两次：
 帧尺寸、亮度、色彩数全都正常，但画面是**别的程序**。
-所以身份校验（侧栏图标 score >= 0.95 且位置在 (16,215)±12）必须每次抓帧都做。
+所以身份校验（左上角 ☰ 的三条等距亮线，见 `match.find_menu_glyph`）必须每次抓帧都做。
+
+**FAULT #14：ok-ww 自带浮层会遮住 ☰。**
+实测 ok-ww 启动时会弹出「节点选择」代理加速浮层，正好盖住左上角 ☰。
+该浮层**不是 Win32 子窗口**（`EnumChildWindows` 返回空）——它画在 ok-ww
+自己的 Qt 表面内，编排**点不掉、也枚举不到**。
+此时校验必然失败，但**校验器是对的**（☰ 确实不可见，按 INV-30 绝不能默认成功）。
+
+⇒ 处置（用户裁定）：**等浮层自行消失**，而不是弱化判据。
+本节点因此会在一段时间内**反复重抓帧**，直到 ☰ 出现或超时。
+每次重抓都走完整的不变量链，**不降低任何严格性**。
+超时上限默认 `IDENTITY_TIMEOUT = 120` 秒，可用 `--identity-timeout` 调整
+（设 0 则只试一次，行为与修复前一致）。
 
 **离线调试**：`--adopt-frame <png>` 直接拿一张已落盘的帧跑校验链，完全不需要窗口。
 这是本节点最常用的单跑姿势 —— 识别链的失败模式大多是静默的，
@@ -26,14 +38,22 @@
 """
 
 import os
+import time
 
 import numpy as np
 
 from .. import assets as assets_mod
-from .. import capture, match
+from .. import capture, input as input_mod, match
 from ..errors import DiscoveryFailure, GuardFailure
 
 from . import context
+
+# FAULT #14：身份校验失败后的重试预算。
+# ok-ww 启动时的「节点选择」浮层会遮住 ☰，它是应用内绘制、非 Win32 子窗口，
+# 编排无法关闭它，只能等它自行消失。用户裁定「等」而不是「弱化判据」，
+# 故此预算给得宽（默认 2 分钟），且每次重试都重跑完整不变量链。
+IDENTITY_TIMEOUT = 120.0
+IDENTITY_INTERVAL = 3.0
 
 
 def extra_args(ap):
@@ -43,6 +63,13 @@ def extra_args(ap):
                     help="不把「色彩可疑」当失败（诊断用）")
     ap.add_argument("--skip-identity", action="store_true",
                     help="跳过身份校验（**危险**，仅用于确认后续环节）")
+    ap.add_argument("--identity-timeout", type=float, default=IDENTITY_TIMEOUT,
+                    help=f"身份校验失败后重试的总时长（秒，默认 {IDENTITY_TIMEOUT:.0f}）。"
+                         f"设为 0 则只试一次")
+    ap.add_argument("--identity-interval", type=float, default=IDENTITY_INTERVAL,
+                    help=f"重试间隔（秒，默认 {IDENTITY_INTERVAL:.1f}）")
+    ap.add_argument("--no-foreground", action="store_true",
+                    help="抓帧前不置前台（诊断用；会抓到遮挡窗口，见 FAULT #16）")
 
 
 def load_rgb(path):
@@ -108,45 +135,88 @@ def body(args, state, log):
     # --- 在线模式：真实抓帧 ----------------------------------------
     hwnd = context.require_hwnd(state, log=log)
     strict = not args.no_strict_content
-    try:
-        f = capture.grab_frame(hwnd, strict_content=strict)
-    except GuardFailure as e:
-        log(f"  [!!] [{e.invariant}] {e.detail}")
-        return "failed", {"hwnd": hwnd, "invariant": e.invariant}, \
-            f"{e.invariant}：{e.detail.splitlines()[0]}"
 
-    log(f"  [OK] INV-1 帧 {f.width}x{f.height} == 窗口 rect")
-    log(f"  [OK] INV-13 内容 均值RGB={f.stats['mean_rgb']} "
-        f"色彩={f.stats['distinct_colors_sampled']}")
+    # FAULT #14：身份校验失败时**重试**（等 ok-ww 的浮层自行消失）。
+    # 每次重试都重跑完整的不变量链 —— 不用「跳过校验」换取通过。
+    deadline = time.time() + max(0.0, args.identity_timeout)
+    attempt = 0
 
-    # 落盘供肉眼复核（只靠数字会漏掉「抓到别的窗口」）
-    from PIL import Image
-    dst = state.shot_path("first-frame")
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    Image.fromarray(f.rgb).save(dst)
-    state.add_shot("6", dst)
-    log(f"  [落盘] {os.path.relpath(dst, state.run_dir)}  ← **请肉眼复核**")
+    while True:
+        attempt += 1
+        # hwnd 绝不缓存（INV-14）：每轮重新发现，窗口重建后也能跟上
+        hwnd = context.require_hwnd(state, log=log) or hwnd
 
-    state.set("frame", {"path": os.path.relpath(dst, state.run_dir).replace("\\", "/"),
-                        "width": f.width, "height": f.height,
-                        "rect": list(f.rect), "adopted": False})
-    data = {"hwnd": hwnd, "width": f.width, "height": f.height,
-            "rect": list(f.rect), "stats": f.stats, "offline": False,
-            "shot": os.path.relpath(dst, state.run_dir).replace("\\", "/")}
+        # ⚠️ FAULT #16：**抓帧前必须置前台**（除诊断开关外）。
+        # 屏幕抓图抓到的是「该矩形处屏幕上可见的东西」，不是「该 hwnd 的内容」。
+        # 节点 6 在链里排在节点 7（置前台）**之前**，若自己不置前台，
+        # 抓到的就是盖在 ok-ww 上的任意窗口 —— 实测抓到过
+        # 驱动终端、DSH 的 Electron 窗口、以及浏览器（近白帧 均值RGB (240,241,242)）。
+        # 这些帧尺寸/亮度/色彩数**全部正常**，只有身份校验能拦住，
+        # 于是表现为「身份校验随机失败、重试几次又好了」。
+        if not args.no_foreground:
+            try:
+                input_mod.ensure_foreground(hwnd, log=None)
+            except GuardFailure as e:
+                log(f"  [警告] {e.invariant}：{e.detail.splitlines()[0]}")
+                log(f"         仍继续抓帧 —— 若身份校验失败，多半就是这个原因")
 
-    if args.skip_identity:
-        log("  [跳过] 身份校验")
-        return "ok", data, f"{f.width}x{f.height}（身份校验已跳过）"
+        try:
+            f = capture.grab_frame(hwnd, strict_content=strict)
+        except GuardFailure as e:
+            log(f"  [!!] [{e.invariant}] {e.detail}")
+            if time.time() >= deadline:
+                return "failed", {"hwnd": hwnd, "invariant": e.invariant}, \
+                    f"{e.invariant}：{e.detail.splitlines()[0]}"
+            log(f"  [重试] {args.identity_interval:.1f}s 后再抓一次"
+                f"（第 {attempt} 次失败，剩余 {deadline - time.time():.0f}s）")
+            time.sleep(args.identity_interval)
+            continue
 
-    log("  [身份校验] 侧栏图标位置/分数")
-    try:
-        ident = identity_check(f.rgb, registry, log)
-    except (GuardFailure, DiscoveryFailure) as e:
-        log(f"    [!!] 身份校验失败：{e}")
-        return "failed", {**data, "identity": None}, "身份校验失败（帧可能不是 ok-ww）"
+        log(f"  [OK] INV-1 帧 {f.width}x{f.height} == 窗口 rect")
+        log(f"  [OK] INV-13 内容 均值RGB={f.stats['mean_rgb']} "
+            f"色彩={f.stats['distinct_colors_sampled']}")
 
-    data["identity"] = {"score": ident["score"], "pos": list(ident["pos"])}
-    return "ok", data, f"{f.width}x{f.height} 身份 {ident['score']:.4f}"
+        # 落盘供肉眼复核（只靠数字会漏掉「抓到别的窗口」）
+        from PIL import Image
+        dst = state.shot_path("first-frame" if attempt == 1
+                              else f"first-frame-attempt{attempt}")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        Image.fromarray(f.rgb).save(dst)
+        state.add_shot("6", dst)
+        log(f"  [落盘] {os.path.relpath(dst, state.run_dir)}  ← **请肉眼复核**")
+
+        state.set("frame", {"path": os.path.relpath(dst, state.run_dir).replace("\\", "/"),
+                            "width": f.width, "height": f.height,
+                            "rect": list(f.rect), "adopted": False})
+        data = {"hwnd": hwnd, "width": f.width, "height": f.height,
+                "rect": list(f.rect), "stats": f.stats, "offline": False,
+                "attempts": attempt,
+                "shot": os.path.relpath(dst, state.run_dir).replace("\\", "/")}
+
+        if args.skip_identity:
+            log("  [跳过] 身份校验")
+            return "ok", data, f"{f.width}x{f.height}（身份校验已跳过）"
+
+        log(f"  [身份校验] 第 {attempt} 次")
+        try:
+            ident = identity_check(f.rgb, registry, log)
+        except (GuardFailure, DiscoveryFailure) as e:
+            log(f"    [!!] 身份校验失败：{e}")
+            if time.time() >= deadline:
+                log(f"  [超时] 已重试 {attempt} 次、共 {args.identity_timeout:.0f}s，"
+                    f"仍检不到 ☰ —— 很可能是 ok-ww 的应用内浮层**一直**挡着左上角")
+                log(f"         （FAULT #14；该浮层非 Win32 子窗口，编排点不掉它）")
+                return "failed", {**data, "identity": None}, \
+                    "身份校验失败（帧可能不是 ok-ww，或左上角被 ok-ww 自身浮层遮挡）"
+            log(f"  [重试] {args.identity_interval:.1f}s 后再抓一次"
+                f"（等浮层消失，剩余 {deadline - time.time():.0f}s）")
+            time.sleep(args.identity_interval)
+            continue
+
+        data["identity"] = {"score": ident["score"], "pos": list(ident["pos"])}
+        if attempt > 1:
+            log(f"  [OK] 第 {attempt} 次尝试通过 —— 浮层已消失")
+        return "ok", data, f"{f.width}x{f.height} 身份 {ident['score']:.4f}"
 
 
 if __name__ == "__main__":

@@ -98,7 +98,8 @@ def find_nte_second_layer(timeout=150):
     """严格找 ok-nte 的第二层窗口。
 
     ⚠️ 实测踩坑：`find_layer2('ok-nte')` 会匹配到**任何标题含 'ok-nte' 的窗口**，
-    例如浏览器/编辑器里打开了 `OK-NTE-ADAPTATION.md` 的窗口。
+    例如浏览器/编辑器里打开了含该词的 Markdown 文档的窗口。
+    （该文档 `OK-NTE-ADAPTATION.md` 已合并进 FRAMEWORK.md，但坑本身与文件名无关。）
     故这里要求标题形如 `ok-nte vX.Y.Z ... - ok-nte`（含版本号 + 分隔符）。
     """
     import re

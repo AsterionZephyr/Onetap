@@ -43,10 +43,52 @@ LOGDIR = Path(r"E:\TOOLS\ScriptsGames\ok-nte\data\apps\ok-nte\working\logs")
 
 TERMINAL_MARK = r"TaskExecutor:Successfully Executed Task, Exiting Game and App!"
 DAILY_END = r"DailyRoutineTask:结束执行日常任务"
-SUMMARY = r"DailyRoutineTask:success:\s*(\[[^\]]*\])\s*failed:\s*(\[[^\]]*\])\s*skipped:\s*(\[[^\]]*\])"
 ITEM_DONE = r"DailyRoutineTask:任务完成:\s*(.+)"
 ITEM_FAIL = r"DailyRoutineTask:任务失败:\s*(.+)"
 KILL_GAME = r"Trying to kill the exe \{[^}]*HTGame\.exe"
+
+# --- 汇总行的两种格式（FAULT #18：程序升级把老正则打死了，必须两种都认）---------
+#
+# **老格式**（ok-nte ≤ v1.4.7，实测 10-08~10-11 日志）——同一行内三段：
+#     DailyRoutineTask:success: ['异象界域', '羁遇赠礼']\nfailed: [...]\nskipped: [...]
+SUMMARY_OLD = (r"DailyRoutineTask:success:\s*(\[[^\]]*\])"
+               r"\s*failed:\s*(\[[^\]]*\])"
+               r"\s*skipped:\s*(\[[^\]]*\])")
+#
+# **新格式**（ok-nte v1.4.8 起，实测 10-12 之后）——三行独立，多一个 info_set 前缀，
+# 且**关键字后没有冒号**：
+#     DailyRoutineTask:info_set success ['异象界域', ...]
+#     DailyRoutineTask:info_set failed []
+#     DailyRoutineTask:info_set skipped ['异象追猎']
+#
+# ⚠️ 老正则 `DailyRoutineTask:success:` 对新格式 `info_set success [` **匹配不到**
+# （实测 `re.search` 返回 None），会让 success/skipped 静默变成 None ——
+# 被跳过的任务就此无声消失。两种格式都要认，且都要能取到三段。
+SUMMARY_NEW = (r"DailyRoutineTask:info_set success\s*(\[[^\]]*\])"
+               r"\s*\n.*?DailyRoutineTask:info_set failed\s*(\[[^\]]*\])"
+               r"\s*\n.*?DailyRoutineTask:info_set skipped\s*(\[[^\]]*\])")
+
+# 兼容别名：外部若引用 SUMMARY 仍可用（指向老格式，但 parse_summary 已两者皆认）
+SUMMARY = SUMMARY_OLD
+
+
+def parse_summary(text):
+    """从日志文本里取 (success, failed, skipped) 三个列表。
+
+    **先试新格式，再退回老格式**；两者都不中返回 (None, None, None)。
+
+    ⚠️ 为什么要有这个函数：FAULT #18 的教训是「正则失配时不要静默返回部分数据」。
+    老代码 `extraction_summary` 在失配时只返回 `(None, extraction_failures(...), None)`，
+    其中 `failed` 看起来是**正确的空列表**，实际上只是「恰好没失败」——
+    真出现失败项时同样会表现为「没有失败」，无从察觉。
+    故本函数**要么三段都给，要么三段都给 None**，由调用方决定如何警示。
+    """
+    for pat in (SUMMARY_NEW, SUMMARY_OLD):
+        m = re.search(pat, text, re.S)
+        if m:
+            return _list(m.group(1)), _list(m.group(2)), _list(m.group(3))
+    return None, None, None
+
 
 
 def read(p):
@@ -157,12 +199,17 @@ def verdict_from_log(text, still_running=False, latest_only=True):
     fail_items = re.findall(ITEM_FAIL, text)
 
     m = re.search(SUMMARY, text, re.S)
-    succ = fail = skip = None
-    if m:
-        succ, fail, skip = _list(m.group(1)), _list(m.group(2)), _list(m.group(3))
+    succ, fail, skip = parse_summary(text)
+    if succ is not None or fail is not None or skip is not None:
         ev.append(f"汇总 success={succ} failed={fail} skipped={skip}")
     else:
-        ev.append(f"逐项: 完成 {len(done_items)} 项 {done_items[-6:]}, 失败 {len(fail_items)} 项 {fail_items[-4:]}")
+        # FAULT #18：三种可能 —— (1) 日志里确实没有汇总行（早退/崩溃）；
+        # (2) **程序升级又改了格式**（老正则就是这样死的）。
+        # 这里必须说出来，不能静默当成「没有失败」。
+        ev.append(f"[!] 未解析到汇总行（格式可能又变了）："
+                  f"逐项 完成 {len(done_items)} 项 {done_items[-6:]}, "
+                  f"失败 {len(fail_items)} 项 {fail_items[-4:]}")
+
 
     ev.append(f"终止标记={terminal} 日常结束={daily_end} 杀游戏={killed}")
 
@@ -209,13 +256,19 @@ def extraction_failures(text, latest_only=True):
 
 
 def extraction_summary(text, latest_only=True):
-    """返回 (success, failed, skipped) 三个列表（可能为 None）。"""
+    """返回 (success, failed, skipped) 三个列表（可能为 None）。
+
+    ⚠️ 三段**要么都给、要么都给 None**（FAULT #18 教训）。调用方拿到
+    全 None 时应当警示「汇总行未解析到」，不得当成「没有失败」。
+    """
     if latest_only:
         text = current_run_text(text)
-    m = re.search(SUMMARY, text, re.S)
-    if not m:
+    succ, fail, skip = parse_summary(text)
+    if succ is None and fail is None and skip is None:
+        # 退回逐项提取：至少把能确定的失败项交出去，但 success/skipped 保持 None
         return None, extraction_failures(text, latest_only=False), None
-    return _list(m.group(1)), _list(m.group(2)), _list(m.group(3))
+    return succ, fail, skip
+
 
 
 class LogWatcher:

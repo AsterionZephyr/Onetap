@@ -11,15 +11,29 @@
     8d  验证    点击后帧差异 >= 阈值才算生效；否则**重试整轮**（N=3）
     8e  等待    轮询完成帧 / 计时器冻结，直到完成 / 超时 / 失败
 
-终止行为三分（HANDOFF §6）——**必须区分**，因为随后的清理行为完全不同：
+终止行为四分（HANDOFF §6）——**必须区分**，因为随后的清理行为完全不同：
 
-    完成  抓到完成帧，ok-ww 自行退出          -> 不杀任何进程
-    超时  计时器冻结 180s（ok-ww 在等游戏）   -> 走清理路径
-    失败  进程消失但从未抓到完成帧            -> 走清理路径
+    完成    抓到完成帧，ok-ww 自行退出          -> 不杀任何进程
+    超时    计时器冻结 180s（ok-ww 在等游戏）   -> 走清理路径
+    失败    点击后连续无变化 / 抓帧被拦          -> 走清理路径
+    未决    进程消失但从未抓到完成帧            -> **报 unknown**（见下）
 
-⚠️ 当前 `exit_notice` 资产**未采集**（见 assets.json），所以「完成帧」判不出来，
-本节点只能以**超时**收场。程序会明确打印这个缺口，不会假装成功 ——
-证据不足时报 UNKNOWN/TIMEOUT，**绝不默认成功**（INV-30）。
+⚠️ **「未决」为什么不是「失败」**（FAULT #17）：
+
+ok-ww 进程消失、而我们没抓到完成帧，有**两种无法用画面区分的成因**：
+
+    (a) 今日任务**已完成** —— ok-ww 找不到要做的任务，会**异常退出**。
+        实测行为：它既不关闭自己，也不关闭游戏，需人工收尾。
+    (b) ok-ww 真的崩了。
+
+成因 (a) 完全正常，把它报成 `failed`（= 断言「出错了」）会误导人，
+也曾让我一度误判为框架缺陷。按 INV-30「证据不足报 UNKNOWN，绝不默认成功」，
+这里既不能报 completed（无证据），也不该报 failed —— 报 **unknown**，
+把判断交给人。日志里会同时给出两种成因供人排除。
+
+⚠️ 当前 `exit_notice` 资产**未采集**（见 assets.json），所以「正常完成」这条
+路径**判不出来**：程序会明确打印这个缺口，并以超时 / 未决收场，
+不会假装成功（INV-30）。补齐 `exit_notice` 后，「未决」才能收敛为可靠的两分。
 
 单独跑：
 
@@ -34,10 +48,12 @@ import time
 from .. import assets as assets_mod
 from .. import capture as capture_mod
 from .. import input as input_mod, match, state as state_mod, win32, window
+from .. import programs as programs_mod
+from .. import verdict as verdict_mod
 from ..errors import GuardFailure
 from ..orchestrator import (
     CHANGE_THRESHOLD, CLICK_RETRIES, CLICK_RETRY_INTERVAL, COMPLETED, FAILED,
-    FREEZE_SECONDS, NAV_RETRIES, POLL_INTERVAL, TIMEOUT, TOTAL_TIMEOUT,
+    FREEZE_SECONDS, NAV_RETRIES, POLL_INTERVAL, TIMEOUT, TOTAL_TIMEOUT, UNKNOWN,
 )
 
 from . import context
@@ -115,19 +131,27 @@ def navigate_to_tasks(state, frame, registry, args, log):
             return frame, False
 
         log("  点击侧栏「任务」图标导航")
-        sidebar = registry["sidebar_tasks"]
-        tpl = sidebar.load()
-        ident = match.verify_identity(frame.rgb, tpl)
-        th, tw = tpl.shape[:2]
-        cx = ident["pos"][0] + tw // 2
-        cy = ident["pos"][1] + th // 2
+        # ⚠️ 绝不可复用 verify_identity 的 pos 当导航目标。
+        # `1_ww.png` 曾同时承担「身份锚点 + 导航目标」两个职责，那个复用
+        # 在改造前恰好成立；身份锚点改成 ☰ 检测后，pos 变成 ☰ 的位置，
+        # 于是导航**点到了 ☰**，页面永远不切换（实测连点 3 次仍停在「关于」页，
+        # 且不报错 —— 典型静默失效）。见 match.find_sidebar_item 的注释。
+        item = match.find_sidebar_item(frame.rgb, match.SIDEBAR_ITEM_TASKS, log=log)
+        if item is None:
+            raise GuardFailure(
+                "INV-24",
+                "无法程序化定位侧栏「任务」项（侧栏等距列表未识别）。\n"
+                "  => 可能原因：侧栏未展开、界面改版、或窗口尺寸不在预期范围。")
+        cx, cy = item["pos"]
         hwnd = state.get("hwnd")
         if not hwnd:
             raise GuardFailure("INV-23", "导航需要窗口句柄，但当前没有（离线模式请加 --only-locate）")
         sp = win32.client_to_screen(hwnd, cx, cy)
         if sp is None:
             raise GuardFailure("INV-23", "ClientToScreen 失败")
-        log(f"  侧栏图标窗口内中心=({cx},{cy}) -> 屏幕 ({sp[0]},{sp[1]})")
+        log(f"  侧栏「任务」为第 {match.SIDEBAR_ITEM_TASKS} 项"
+            f"（共 {item['n_items']} 项，行距 {item['pitch']}px），"
+            f"窗口内点=({cx},{cy}) -> 屏幕 ({sp[0]},{sp[1]})")
         input_mod.guarded_click(hwnd, sp[0], sp[1],
                                 dry_run=False, log=log)
         time.sleep(1.5)
@@ -235,6 +259,83 @@ def click_and_confirm(state, frame, registry, args, log):
 # --------------------------------------------------------- 8e 等待完成
 
 
+def wait_for_nte_completion(state, args, log):
+    """ok-nte 的等待完成：**看日志**，不看画面（HANDOFF §6 / FRAMEWORK §0.1）。
+
+    ## 为什么 ok-nte 不能用 ok-ww 那套
+
+    ok-ww 把终态**画在界面上**（完成帧 `exit_notice`），所以它必须读画面。
+    ok-nte 反过来：它把终态**写进日志**
+    （`TaskExecutor:Successfully Executed Task, Exiting Game and App!`），
+    且游戏 `HTGame.exe` 全屏时屏幕抓图**必然全黑**（INV-13 会拒绝）——
+    读画面在 ok-nte 上既不可靠也无必要。
+
+    ## ★ 为什么用 LogWindow（字节偏移）而不是「按 ok:quit app 分段」
+
+    若上一次运行被**外部强制终止**（本框架的兜底清理正是如此），
+    它不会写 `ok:quit app` ⇒ 相邻两次运行被**合并成一段** ⇒
+    新一次运行**借用上一次的成功汇总**，实测在点击后 **1 秒**就报 SUCCESS
+    —— 假阳性，且**不报任何错**。按字节偏移切窗口与上一次如何收尾无关。
+
+    ## 判定只看「是否完成」
+
+    用户明确要求（m01268）：**个别任务失败与本项目无关，只看是否完成**。
+    失败详情另行取出打印，不参与判定。
+    """
+    log(f"\n[8e] 等待完成（ok-nte 日志判据）：采样 {POLL_INTERVAL}s；"
+        f"兜底 {args.total_timeout:.0f}s")
+    log(f"  日志窗口 {verdict_mod.NTE_LOGDIR}")
+
+    window_log = verdict_mod.LogWindow()
+    started = time.time()
+    last_report = 0.0
+    last_alive = True
+
+    while True:
+        now = time.time()
+        elapsed = now - started
+
+        if elapsed > args.total_timeout:
+            return TIMEOUT, f"整条链超过兜底上限 {args.total_timeout:.0f}s", None
+
+        window_log.poll()
+        alive = bool(window.running(prog=programs_mod.NTE))
+        last_alive = alive
+        v, ev = window_log.verdict(still_running=alive)
+
+        if v == verdict_mod.SUCCESS:
+            log(f"  +{elapsed:6.0f}s  *** 完成 ***（ok-nte 日志判据）")
+            for e in ev:
+                log(f"      {e}")
+            fails = window_log.failures()
+            if fails:
+                # 失败项**不影响判定**，但必须让人看见（用户要求）。
+                log(f"  [注意] 本次有 {len(fails)} 项子任务失败（不影响完成判定）："
+                    f"{fails}")
+            else:
+                log("  [OK] 无子任务失败")
+            state.set("verdict_evidence", ev)
+            return COMPLETED, "；".join(ev), None
+
+        if not alive and elapsed > POLL_INTERVAL * 2:
+            # 进程没了但日志里没有终止标记 —— 分不清「无事可做而异常退出」
+            # 与「崩溃」，按 INV-30 报 unknown，绝不默认成功。
+            log(f"  +{elapsed:6.0f}s  ok-nte 进程消失（日志中无终止标记）")
+            for e in ev:
+                log(f"      {e}")
+            return UNKNOWN, (
+                "ok-nte 进程消失，但日志中从未出现终止标记 —— 无法区分"
+                "「今日任务已完成、无事可做」与「崩溃」。这是证据不足，"
+                "不是判定失败。请人工核对 ok-nte 任务日志。"), None
+
+        if now - last_report > 30:
+            last_report = now
+            log(f"  +{elapsed:6.0f}s  … 仍在运行 "
+                f"（日志 {len(window_log.text())} 字节）")
+
+        time.sleep(POLL_INTERVAL)
+
+
 def wait_for_completion(state, registry, args, log):
     """等待完成 / 超时。返回 (result, detail, shot_path)。
 
@@ -267,11 +368,22 @@ def wait_for_completion(state, registry, args, log):
         if elapsed > args.total_timeout:
             return TIMEOUT, f"整条链超过兜底上限 {args.total_timeout:.0f}s", None
 
-        # ok-ww 进程没了 —— 分两种：抓到过完成帧 = 完成；没抓到 = 失败
+        # ok-ww 进程没了 —— 分三种，**必须区分**（见文件头「终止行为三分」）
         if not window.okww_running():
             if completion_seen:
                 return COMPLETED, "ok-ww 已自行退出（此前抓到完成帧）", None
-            return FAILED, "ok-ww 进程消失，但从未抓到完成帧", None
+            # 消失但没抓到完成帧 —— **成因不可辨**：
+            #   (a) 今日任务已完成 -> ok-ww 无事可做而异常退出（实测行为：
+            #       不关自己、不关游戏，需人工收尾）
+            #   (b) 崩溃
+            # 按 INV-30 报 UNKNOWN，**不默认成功、也不武断出错**。
+            log(f"  +{elapsed:6.0f}s  ok-ww 进程消失（未抓到完成帧）")
+            return UNKNOWN, (
+                "ok-ww 进程消失，但从未抓到完成帧 —— 无法区分「今日任务已完成、"
+                "无事可做而异常退出」与「崩溃」。这是证据不足，不是判定失败。"
+                "常见成因：今日任务此前已完成（ok-ww 找不到要做的任务会异常退出，"
+                "且不会关闭自己与游戏）。exit_notice 资产未采集，故无完成帧可依。"
+            ), None
 
         info = window.find_okww_window()
         if not info:
@@ -318,6 +430,7 @@ def wait_for_completion(state, registry, args, log):
 
 
 def body(args, state, log):
+    prog = context.resolve_program(state, args, log=log)
     registry = assets_mod.Registry()
 
     # 取首帧：可注入（离线调试），否则实时抓
@@ -390,13 +503,24 @@ def body(args, state, log):
                 f"连续 {CLICK_RETRIES} 轮点击后画面无变化 —— ok-ww 很可能失焦静默挂起")
 
     # --- 8e --------------------------------------------------------------
-    result, detail, frame_path = wait_for_completion(state, registry, args, log)
+    # ⚠️ 判据按**目标程序**分派（HANDOFF §6）：
+    #   ok-ww  -> 看画面（完成帧 exit_notice）
+    #   ok-nte -> 看日志（终止标记）—— 游戏全屏时抓图必然全黑，读画面不可行
+    if prog.key == "nte":
+        result, detail, frame_path = wait_for_nte_completion(state, args, log)
+    else:
+        result, detail, frame_path = wait_for_completion(state, registry, args, log)
     log(f"\n[结果] {result}：{detail}")
     state.set("result", result)
     state.set("result_detail", detail)
 
-    status = {"completed": "ok", "timeout": "timeout", "failed": "failed"}.get(
-        result, "failed")
+    # result -> 状态码。**"unknown" 映射为 "skipped" 是刻意的**：
+    # context.run_step 只把 "ok"/"skipped" 当非失败（退出码 0、链条继续）。
+    # unknown 时 ok-ww 与游戏都已经退出了，**节点 9 的清理无从下手**，
+    # 所以让链条正常走完（节点 9 会自己判定「无需清理」），
+    # 再由**人**看日志裁决 —— 而不是用退出码 3 把一个正常夜间流程标红。
+    status = {"completed": "ok", "timeout": "timeout", "failed": "failed",
+              "unknown": "skipped"}.get(result, "failed")
     return (status,
             {"result": result, "detail": detail, "completion_frame": frame_path},
             f"{result}：{detail}")

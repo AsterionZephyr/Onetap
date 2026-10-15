@@ -106,10 +106,37 @@ def ensure_dpi_aware():
             pass
 
 
+# --- 提权相关 API 的显式原型 ------------------------------------------
+#
+# 必须声明 argtypes/restype：ctypes 默认把 restype 当 **c_int（32 位）**，
+# 而 HANDLE 是**指针宽度**。64 位下 kernel32.GetCurrentProcess() 返回伪句柄
+# (HANDLE)-1 = 0xFFFFFFFFFFFFFFFF，被截断成 0xFFFFFFFF 传给 OpenProcessToken，
+# 于是调用**静默失败**（last error 6 = ERROR_INVALID_HANDLE），
+# is_admin() 从此**恒返回 False** —— 不提权、不报错。
+# 实测：截断句柄 False / 正确句柄 True，见 docs/_probe_win32_admin.py。
+
+kernel32.GetCurrentProcess.argtypes = []
+kernel32.GetCurrentProcess.restype = wt.HANDLE
+kernel32.CloseHandle.argtypes = [wt.HANDLE]
+kernel32.CloseHandle.restype = wt.BOOL
+
+advapi32.OpenProcessToken.argtypes = [wt.HANDLE, wt.DWORD,
+                                      ctypes.POINTER(wt.HANDLE)]
+advapi32.OpenProcessToken.restype = wt.BOOL
+advapi32.GetTokenInformation.argtypes = [wt.HANDLE, ctypes.c_int,
+                                         ctypes.c_void_p, wt.DWORD,
+                                         ctypes.POINTER(wt.DWORD)]
+advapi32.GetTokenInformation.restype = wt.BOOL
+
+
 def is_admin():
     """当前进程是否已提权（TRUE = 已提权）。
 
     读的是**本进程的令牌**，不是「用户会话的权限」。
+
+    注意：openprocesstoken 拿的是**伪句柄** -1，不要喂给它任何**真实句柄**
+    —— 同族 API（OpenProcess/QueryFullProcessImageNameW）返回的是真句柄，
+    绝不能用 -1 代替。
     """
     token = wt.HANDLE()
     if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(),
@@ -127,6 +154,24 @@ def is_admin():
         return bool(elevated.value)
     finally:
         kernel32.CloseHandle(token)
+
+
+def self_check_admin():
+    """返回 (is_admin(), 诊断串)。不抛异常，供巡检与自检用。
+
+    is_admin() 曾经**恒为 False**（句柄截断，见上方注释）。本函数用
+    `IsUserAnAdmin` 做交叉校验：两者不一致说明绑定又坏了，
+    这时**绝不默认成功**（INV-30），必须显式暴露出来。
+    """
+    mine = is_admin()
+    try:
+        theirs = bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception as exc:                      # pragma: no cover
+        return mine, f"交叉校验不可用：{exc}"
+    if mine != theirs:
+        return mine, (f"提权判定不一致：is_admin()={mine} "
+                      f"IsUserAnAdmin()={theirs} —— win32 绑定可能已失效")
+    return mine, f"一致（is_admin()={mine}）"
 
 
 # --- 窗口发现 ---------------------------------------------------------
@@ -347,10 +392,16 @@ def terminate_process(pid):
         kernel32.CloseHandle(h)
 
 
-def list_processes(names):
+def list_processes(names=None):
     """按进程名列出 (name, pid, exe_path)。
 
     用 CreateToolhelp32Snapshot 而非 tasklist，避免子进程与编码问题。
+
+    `names=None` ⇒ **不过滤**，列出全部进程。
+    ⚠️ 为什么需要这个模式：`cleanup.confirm_exited` 要确认某个 pid 是否真的消失，
+    而按名字筛会**漏看**仍存活的进程（ok-nte 第二层可能是 `python.exe`
+    而非 `pythonw.exe`）⇒ 漏看就是误报「已退出」。
+    确认存活/退出必须扫全量；按名字筛只适合**缩小范围**的可选优化。
     """
     TH32CS_SNAPPROCESS = 0x00000002
 
@@ -363,7 +414,7 @@ def list_processes(names):
                     ("pcPriClassBase", ctypes.c_long), ("dwFlags", wt.DWORD),
                     ("szExeFile", ctypes.c_wchar * 260)]
 
-    wanted = {n.lower() for n in names}
+    wanted = None if names is None else {n.lower() for n in names}
     snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
     if snap == -1:
         return []
@@ -374,7 +425,7 @@ def list_processes(names):
         ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
         while ok:
             name = entry.szExeFile
-            if name.lower() in wanted:
+            if wanted is None or name.lower() in wanted:
                 pid = entry.th32ProcessID
                 out.append((name, pid, process_image_path(pid)))
             ok = kernel32.Process32NextW(snap, ctypes.byref(entry))

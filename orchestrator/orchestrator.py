@@ -31,6 +31,15 @@ COMPLETED = "completed"
 TIMEOUT = "timeout"
 FAILED = "failed"
 
+# 「证据不足」：ok-ww 进程消失，但我们从未抓到过完成帧。
+# 成因有两种，**画面无法区分**（INV-30）：
+#   (a) 今日任务已完成 —— ok-ww 找不到要做的任务，**异常退出**
+#       （实测：它既不会关闭自己，也不会关闭游戏，需人工收尾）
+#   (b) ok-ww 真的崩了
+# 既不能报 completed（无证据），也不该报 failed —— failed 是断言「出错了」，
+# 而成因 (a) 完全正常。按 INV-30 报 UNKNOWN，把判断交给人。
+UNKNOWN = "unknown"
+
 # 退出码
 EXIT_OK = 0
 EXIT_CONFIG = 2       # 环境/前提不成立
@@ -448,6 +457,15 @@ class Orchestrator:
                 return EXIT_OK
             if result == TIMEOUT:
                 return EXIT_TIMEOUT
+            # FAULT #17：证据不足（进程消失但无完成帧）**不是失败**，
+            # 不该用「不变量被破坏」的退出码。用 EXIT_OK 之外的专用码
+            # 会让人以为出错了；这里沿用 EXIT_GUARD 会与真正的 GuardFailure
+            # 混淆，故显式分流到 EXIT_UNEXPECTED 并打印说明。
+            if result == UNKNOWN:
+                self.log("\n[未决] 证据不足：ok-ww 进程消失但从未抓到完成帧。"
+                         "常见成因是「今日任务此前已完成，ok-ww 无事可做而异常退出」，"
+                         "也可能是崩溃。请人工核对 ok-ww 日志。")
+                return EXIT_UNEXPECTED
             return EXIT_GUARD
 
         except DiscoveryFailure as e:
