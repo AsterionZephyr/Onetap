@@ -514,17 +514,20 @@ def wait_for_nte_completion(state, args, log, window_log=None):
             # 所以：给一段**有界**的 settle 窗口，等它把关闭动作做完。
             # 判据是「它自己退出」，不是「等到日志不再增长」——
             # 后者会被无关日志拖住。超时就继续往下走（尽量干净，但不无限等）。
+            # ⚠️ 只认 **settle 期间新增** 的日志：`poll()` 的返回值就是本次新增，
+            # 不能用 `text()` —— 后者返回**整轮累积**文本，会把本轮的任意一行
+            # 当成「刚刚关的游戏」（范围比判据意图大得多）。
             settle_deadline = time.time() + NTE_SETTLE_SECONDS
+            new_text = ""
             while time.time() < settle_deadline:
-                window_log.poll()
+                new_text += window_log.poll()
                 if not window.running(program=programs_mod.NTE):
                     break
                 time.sleep(POLL_INTERVAL)
 
             settled = not bool(window.running(program=programs_mod.NTE))
-            window_log.poll()
-            extra = window_log.text()
-            if re.search(verdict_mod.NTE_KILL_GAME, extra, re.I):
+            new_text += window_log.poll()
+            if re.search(verdict_mod.NTE_KILL_GAME, new_text, re.I):
                 log("  [OK] ok-nte 已自行关闭游戏")
             elif settled:
                 # 没看到关游戏的日志，但它确实退干净了。

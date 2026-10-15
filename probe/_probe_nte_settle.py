@@ -44,7 +44,15 @@ def check(name, cond, detail=""):
 
 
 class FakeLogWindow:
-    """最小可用的 LogWindow 替身：poll() 追加预置文本并记录调用次数。"""
+    """最小可用的 LogWindow 替身：poll() 追加预置文本并记录调用次数。
+
+    ⚠️ 语义必须与真的 LogWindow **一致**，否则探针会验收不到真问题：
+      - `poll()` 返回**本次新增**（产品代码用的就是它的返回值）；
+      - `text()` 返回**整轮累积**（含运行最开头的内容）。
+
+    第一版探针让 poll() 恒返回 ""，于是漏掉了「用 text() 判范围」这个缺陷 ——
+    夹具与真实现的语义偏差，会让探针给出**虚假的通过**。
+    """
 
     def __init__(self, chunks):
         self._chunks = list(chunks)
@@ -54,7 +62,9 @@ class FakeLogWindow:
     def poll(self):
         self.polls += 1
         if self._chunks:
-            self._buf += self._chunks.pop(0)
+            c = self._chunks.pop(0)
+            self._buf += c
+            return c
         return ""
 
     def text(self):
@@ -75,26 +85,34 @@ class FakeProc:
         return (time.time() - self.t0) < self.alive_until
 
 
-def run_scenario(name, alive_for, log_chunks, expect_in_log, unexpected_in_log=()):
-    """复刻 step8 的 settle 段逻辑（与产品代码同构），返回 (settled, log_text, elapsed)。"""
+def run_scenario(name, alive_for, log_chunks, expect_in_log, unexpected_in_log=(),
+                 pre_chunks=()):
+    """复刻 step8 的 settle 段逻辑（与产品代码同构），返回 (settled, log_text, elapsed)。
+
+    `pre_chunks` 模拟「运行**早期**就已经写进日志」的内容（settle 之前就被
+    poll 掉了）。用来验证 settle 判据只看**新增**，不被旧内容蒙混。
+    """
     proc = FakeProc(alive_for)
-    lw = FakeLogWindow(log_chunks)
+    lw = FakeLogWindow(list(log_chunks))
+    # pre_chunks 先塞进累积缓冲（模拟运行早期已读入），不进待读队列
+    lw._buf = "".join(pre_chunks)
+
     settle = 0.4                      # 探针用小值，不拖慢回归
     lines = []
 
     deadline = time.time() + settle
+    new_text = ""
     while time.time() < deadline:
-        lw.poll()
+        new_text += lw.poll()
         if not proc.alive():
             break
         time.sleep(0.05)
 
     settled = not proc.alive()
     elapsed = time.time() - (deadline - settle)
-    lw.poll()
-    extra = lw.text()
+    new_text += lw.poll()
 
-    if verdict_mod.NTE_KILL_GAME and _search(extra):
+    if verdict_mod.NTE_KILL_GAME and _search(new_text):
         lines.append("已自行关闭游戏")
     elif settled:
         lines.append("未见关闭游戏的记录")
@@ -103,6 +121,7 @@ def run_scenario(name, alive_for, log_chunks, expect_in_log, unexpected_in_log=(
 
     print(f"\n--- {name} ---")
     print(f"  settled={settled}  耗时={elapsed:.2f}s  polls={lw.polls}")
+    print(f"  新增文本长度={len(new_text)}  累积文本长度={len(lw.text())}")
     print(f"  措辞: {lines[0]}")
 
     for want in expect_in_log:
@@ -111,7 +130,7 @@ def run_scenario(name, alive_for, log_chunks, expect_in_log, unexpected_in_log=(
     for bad in unexpected_in_log:
         check(f"{name}: 不得报「{bad}」", bad not in lines[0],
               f"实际「{lines[0]}」")
-    return settled, lines[0], elapsed, lw
+    return settled, lines[0], elapsed, lw, new_text
 
 
 def _search(text):
@@ -134,7 +153,7 @@ KILL_LINE = ("2026-10-15 00:23:20,572 INFO TaskExecutor process:"
              "WindowsNoEditor\\\\HT\\\\Binaries\\\\Win64\\\\HTGame.exe'}")
 
 # 场景 A：正常 —— 先写日志再退出
-settled_a, msg_a, el_a, lw_a = run_scenario(
+settled_a, msg_a, el_a, lw_a, new_a = run_scenario(
     "A 正常收尾（进程退出 + 写了关游戏日志）",
     alive_for=0.15,
     log_chunks=[KILL_LINE],
@@ -145,7 +164,7 @@ check("A: 进程确实退出了", settled_a)
 check("A: settle 期间确实等待过（耗时 > 0）", el_a > 0, f"{el_a:.3f}s")
 
 # 场景 B：退了但没写关游戏日志 —— 绝不能谎称已关游戏
-settled_b, msg_b, el_b, lw_b = run_scenario(
+settled_b, msg_b, el_b, lw_b, new_b = run_scenario(
     "B 退出但无关闭日志（证据不足）",
     alive_for=0.15,
     log_chunks=["2026-10-16 02:54:06,809 INFO TaskExecutor "
@@ -156,7 +175,7 @@ settled_b, msg_b, el_b, lw_b = run_scenario(
 check("B: 进程确实退出了", settled_b)
 
 # 场景 C：一直不退 —— 必须是有界的
-settled_c, msg_c, el_c, lw_c = run_scenario(
+settled_c, msg_c, el_c, lw_c, new_c = run_scenario(
     "C 始终不退出（必须交由节点 9）",
     alive_for=99.0,
     log_chunks=[],
@@ -166,9 +185,26 @@ settled_c, msg_c, el_c, lw_c = run_scenario(
 check("C: 进程确实还活着", not settled_c)
 check("C: 耗时有界（< 2s，未被无限等待）", el_c < 2.0, f"{el_c:.3f}s")
 
-# 跨场景：三种措辞必须互不相同，否则等于没区分
-check("三场景措辞互不相同", len({msg_a, msg_b, msg_c}) == 3,
-      f"得到 {len({msg_a, msg_b, msg_c})} 种")
+# ★ 场景 D：**早期**已经写过一行关游戏日志（例如上一次收尾的残留被轮转进来），
+#    但 settle 期间**没有**新的关游戏记录，且进程没退。
+#    ⇒ 绝不能因为「累积文本里有」就报「已自行关闭游戏」。
+#    这条正是「用 text() 而不是 poll() 返回值」那个缺陷的回归。
+settled_d, msg_d, el_d, lw_d, new_d = run_scenario(
+    "D 早期有旧关游戏记录、settle 期间没有（范围必须只看新增）",
+    alive_for=99.0,
+    log_chunks=[],
+    pre_chunks=[KILL_LINE],          # 旧内容：在累积缓冲里，但不在本次新增里
+    expect_in_log=["仍未退出"],
+    unexpected_in_log=["已自行关闭游戏"],
+)
+check("D: 旧记录不得冒充本次关游戏", "已自行关闭游戏" not in msg_d)
+check("D: 累积文本里确实有旧记录（夹具有效）",
+      "Trying to kill the exe" in lw_d.text())
+check("D: 本次新增里没有关游戏记录", "Trying to kill the exe" not in new_d)
+
+# 跨场景：四种措辞必须互不相同，否则等于没区分
+check("四场景措辞互不相同", len({msg_a, msg_b, msg_c, msg_d}) >= 3,
+      f"得到 {len({msg_a, msg_b, msg_c, msg_d})} 种")
 
 # 场景 A 的关键：返回前重新 poll 过，退出前写的日志必须已被捕获到
 check("A: 返回前重新 poll（最后那批日志没丢）",
