@@ -344,7 +344,7 @@ ORDER = ["ok-ww", "ok-nte"]                 # 编排顺序（用户指定：ok-w
 | ~~多程序串联~~ | ✅ **已实现**：`--target both`（ok-ww → ok-nte 各跑一轮），见 §9 |
 | ~~ok-nte 收尾抢跑~~ | ✅ **已修**（FAULT #27）：见完成标记后给有界 settle 窗口，等它自己关游戏 |
 | **游戏 launcher 残留** | ok-nte 只关游戏本体 `HTGame.exe`，**留下 `NTEGame.exe`**（launcher，7~9 个窗口含托盘图标）。节点 9 已在 `completed` 分支报出，但按 Q3 **不主动杀**。⚠️ **清理时必须显式用跨程序入口** `watchdog.force_close(None, all_programs=True)` —— `force_close(None)` 的 `None` **不等于「全部」**，会回落到 `programs.DEFAULT`（ok-ww），只按 `Client-Win64-Shipping.exe` 查，然后报「游戏进程已全部退出」（**为真但误导**，见 FAULT #32） |
-| ~~「今日任务已完成」残留需人工收尾~~ | ✅ **已自动收尾**（2026-10-16）：用户裁定「遇到『每日任务已做完导致 ok-ww 失败且进程/游戏不退出』时**自行手动关闭，不询问用户**」。节点 9 的 `unknown` 分支原先只看 `window.running(prog)`（**目标程序自己**），而该情形里 ok-ww 进程**恰恰是已经退出的那一个**，留下的是**游戏** ⇒ 旧代码打印「无残留，无需清理」**而游戏仍在跑**。现改为**两者都查**，有游戏残留就走 `watchdog.force_close`。⚠️ 注意**不能只靠 `run_cleanup`**：它按 `process_prefix` 只杀目标程序目录下的进程，游戏根本不在那里 |
+| ~~「今日任务已完成」残留需人工收尾~~ | ✅ **已自动收尾**（2026-10-16）：用户裁定「遇到『每日任务已做完导致 ok-ww 失败且进程/游戏不退出』时**自行手动关闭，不询问用户**」。节点 9 的 `unknown` 分支原先只看 `window.running(prog)`（**目标程序自己**），而该情形里 ok-ww 进程**恰恰是已经退出的那一个**，留下的是**游戏** ⇒ 旧代码打印「无残留，无需清理」**而游戏仍在跑**。现改为**两者都查**，有游戏残留就走 `watchdog.force_close`。⚠️ 注意**不能只靠 `run_cleanup`**：它按 `process_prefix` 只杀目标程序目录下的进程，游戏根本不在那里。**已两程序各自端到端验证**：ok-nte 用 `NTEGame.exe`、ok-ww 用 `Client-Win64-Shipping.exe`，探针见 §11 |
 | **通用唯一性 API** | 把「全帧所有 >=0.85 位置」做成标准接口，任何定位都必须过这一关 |
 | **性能** | 当前 `all_hits` 是 Python 逐点循环，1520×1020 全帧扫描很慢。正式实现应用 numpy 向量化（`stride_tricks` + 矩阵相关） |
 
@@ -455,6 +455,12 @@ for target in 配置的顺序:
 | `probe/capture.py` | 窗口发现、抓帧、帧统计、PNG 落盘 |
 | `probe/template_probe.py` | `match_template`（归一化互相关）、`capture_okww` |
 | **`probe/_probe_gui_target_wire.py`** | **GUI 目标选择器接线验证**（调真实 `on_run`，stub `Runner` 看 argv） |
+| **`probe/_probe_ww_sessions.py`** | **把 ok-ww 日志按会话切开列结局**。会话边界用 `ok:ok-script init`，**不能按 `ok:quit app`** —— 异常退出的会话根本不写后者。用来找「没跑完」的真实样本 |
+| **`probe/_probe_ww_unknown_cleanup.py`** | **ok-ww UNKNOWN + 游戏残留 自动收尾回归**（三层：真实历史会话判据 / 分支静态检查 / `--live` 真起游戏端到端） |
+| **`probe/_probe_unknown_cleanup.py`** | **ok-nte 侧同一路径的回归**（纯静态 + 只读，随时可跑） |
+| **`probe/_probe_force_close_all.py`** | **跨程序清理** `force_close(all_programs=True)` 回归（FAULT #32：`None` 不等于「全部」） |
+| **`probe/_probe_foreground.py`** | **抢前台**静态 12 项 + live 实测（FAULT #29：裸调 `SetForegroundWindow` 被前台锁挡住会永久失败） |
+| **`probe/_probe_executor_pause.py`** | **执行器暂停**诊断（FAULT #30：`pos_invalid: (-32000, -32000)` 哨兵坐标）。含 `ok-script.2026-10-12.log` 作**负向**用例 |
 | **`legacy/probe-investigation/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
 | **`legacy/probe-investigation/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
 | **`probe/nte_main.py`** | `all_hits` **唯一性检查工具**（被多个脚本复用） |
