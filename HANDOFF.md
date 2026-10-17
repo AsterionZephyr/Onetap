@@ -87,6 +87,13 @@
 3. **用标题正则发现窗口**，不可精确相等。真实标题：`OK-WW v3.6.7 China  - OK-WW`（**两个空格**）、`ok-nte v1.4.6 China  - ok-nte`。
 4. **点击前必须重新判定前台**，且进一步确认**目标坐标处最顶层窗口是目标程序**。
 5. **前台切换用 `SetForegroundWindow`**，**不要点任务栏**（任务栏按钮无独立 HWND，位置不稳定）。
+    ⚠️ **FAULT #35（实测 2026-10-17）**：**游戏窗口占住前台时，API 抢不过来** ——
+    `set_foreground` 三手段（裸调 / `AttachThreadInput` / ALT 抖动）对它 **10/10 全败**，
+    且**最小化游戏也不释放**前台。此时唯一有效的是**在目标窗口体上真实点击一次**
+    （点 `top + min(18, h//8)`、`left + max(20, w//5)`，即标题栏偏左，避开右上角按钮与主体控件）。
+    实测点击一次即夺回，随后 `ensure_foreground` 立即通过（3/3）。
+    `input.ensure_foreground` 现已实现这一手（`_click_to_activate`），在 10 次 API 重试
+    **全部用尽之后**调用一次 —— 也是这条规则里「真实点击能拿到激活」那半句的兑现。
 6. **匹配阈值取 0.90，不要取 0.95** —— 布局偏移会让正确页面降到 0.9402，0.95 会误拒。
 7. **判断 Win32 调用成败只看返回值**，`GetLastError` 可能是无关调用的残留（实测残留值 203）。
 8. **清理由 hwnd→pid 反查**；框架是**独占式**的（同时只跑其中一个）。
@@ -460,6 +467,7 @@ for target in 配置的顺序:
 | **`probe/_probe_unknown_cleanup.py`** | **ok-nte 侧同一路径的回归**（纯静态 + 只读，随时可跑） |
 | **`probe/_probe_force_close_all.py`** | **跨程序清理** `force_close(all_programs=True)` 回归（FAULT #32：`None` 不等于「全部」） |
 | **`probe/_probe_foreground.py`** | **抢前台**静态 12 项 + live 实测（FAULT #29：裸调 `SetForegroundWindow` 被前台锁挡住会永久失败） |
+| **`probe/_probe_foreground_click.py`** | **抢前台的最后一手**回归（FAULT #35：游戏窗口占前台时 API 全败，必须真实点击窗口体）。静态 AST 接线 + 打桩语义 + 只读几何，**不依赖 live 复现**（该病态状态偶发、事后无法按需重建） |
 | **`probe/_probe_executor_pause.py`** | **执行器暂停**诊断（FAULT #30：`pos_invalid: (-32000, -32000)` 哨兵坐标）。含 `ok-script.2026-10-12.log` 作**负向**用例 |
 | **`legacy/probe-investigation/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
 | **`legacy/probe-investigation/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
