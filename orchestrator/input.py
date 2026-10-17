@@ -2,10 +2,10 @@
 
 本框架只用真实光标（ADR 0001）。真实光标有三个硬性后果：
 
-  1. **窗口必须在前台**（INV-8）。失焦时 ok-ww 的 sleep() 没有出口，会**静默挂起**，
+  1. **窗口必须在前台**（INV-8）。失焦时目标程序的 sleep() 没有出口，会**静默挂起**，
      症状是「点了毫无反应，且没有任何报错」（FRAMEWORK §2.4）。
   2. **每次点击前必须重新判定前台**：点击会把焦点交给遮挡在上的窗口（实测五）。
-  3. **还要判定目标坐标处最顶层的窗口是 ok-ww**（INV-23）——「在前台」不足以
+  3. **还要判定目标坐标处最顶层的窗口是目标程序**（INV-23）——「在前台」不足以
      保证该坐标没被覆盖。
 
 `ensure_foreground` 实现「无条件抢」（Q4 决策）；`guarded_click` 实现动作前置关。
@@ -22,7 +22,7 @@ FOREGROUND_INTERVAL = 0.4    # 每次间隔（秒）
 
 def ensure_foreground(hwnd, tries=FOREGROUND_TRIES, interval=FOREGROUND_INTERVAL,
                       log=None):
-    """把 ok-ww 抢到前台并**验证**。
+    """把目标程序抢到前台并**验证**。
 
     步骤（顺序不能换）：
       1. ShowWindow(SW_RESTORE) —— 防最小化（INV-22）
@@ -65,18 +65,18 @@ def ensure_foreground(hwnd, tries=FOREGROUND_TRIES, interval=FOREGROUND_INTERVAL
 
     raise GuardFailure(
         "INV-8",
-        f"连续 {tries} 次未能把 ok-ww 置前台 —— 真实光标点击会落到别处，"
-        f"且 ok-ww 会静默挂起。请让开鼠标或关闭遮挡窗口后重试")
+        f"连续 {tries} 次未能把目标程序置前台 —— 真实光标点击会落到别处，"
+        f"且它会静默挂起。请让开鼠标或关闭遮挡窗口后重试")
 
 
 def assert_top_window(hwnd, screen_x, screen_y):
-    """INV-23：目标屏幕坐标处最顶层的窗口必须是 ok-ww。"""
+    """INV-23：目标屏幕坐标处最顶层的窗口必须是目标程序。"""
     top = win32.top_window_at(screen_x, screen_y)
     if top != hwnd:
         raise GuardFailure(
             "INV-23",
             f"目标屏幕坐标 ({screen_x},{screen_y}) 处最顶层窗口是 {top}，"
-            f"不是 ok-ww({hwnd}) —— 点击会落到别的程序上")
+            f"不是目标窗口({hwnd}) —— 点击会落到别的程序上")
 
 
 def guarded_click(hwnd, screen_x, screen_y, dry_run=False, log=None):
@@ -85,7 +85,7 @@ def guarded_click(hwnd, screen_x, screen_y, dry_run=False, log=None):
     前置关（顺序）：
       1. 屏幕坐标在屏内
       2. 每次点击前**重新判定**前台（INV-8）
-      3. 目标坐标处最顶层为 ok-ww（INV-23）
+      3. 目标坐标处最顶层为目标程序（INV-23）
 
     dry_run=True 时只做前置关，不移动光标 —— 这正是 `--dry-run` 能自证的原因。
     """

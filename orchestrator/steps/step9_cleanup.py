@@ -123,13 +123,13 @@ def body(args, state, log):
     # 这里不能默默走清理路径 —— 人看到 unknown 的第一反应是「我的日常到底跑没跑」，
     # 必须把「无法判定」这句话再讲一遍（INV-30）。
     if result == UNKNOWN and not args.force:
-        log("  ⚠ 节点 8 报 unknown（证据不足），不是失败：ok-ww 进程已自行消失，"
+        log(f"  ⚠ 节点 8 报 unknown（证据不足），不是失败：{prog.display} 进程已自行消失，"
             "但框架从未抓到完成帧。")
         log("    两种成因无法用画面区分：")
-        log("      (a) 今日任务**此前已完成** —— ok-ww 找不到要做的任务而异常退出")
+        log(f"      (a) 今日任务**此前已完成** —— {prog.display} 找不到要做的任务而异常退出")
         log("          （实测行为：它不关自己、也不关游戏，需人工收尾）")
-        log("      (b) ok-ww 崩溃")
-        log("    请人工核对 ok-ww 任务日志确认究竟是哪一种。")
+        log(f"      (b) {prog.display} 崩溃")
+        log(f"    请人工核对 {prog.display} 任务日志确认究竟是哪一种。")
         alive = window.running(prog)
         game = []
         try:
@@ -137,7 +137,7 @@ def body(args, state, log):
         except Exception as e:                       # 只读探测，失败不该中断清理
             log(f"    [警告] 游戏侧进程查询失败：{e}")
         if not alive and not game:
-            log("  确认：ok-ww 进程与游戏均已不在 —— 无残留，无需清理")
+            log(f"  确认：{prog.display} 进程与游戏均已不在 —— 无残留，无需清理")
             return ("ok",
                     {"reason": "unknown", "killed": [], "skipped": [],
                      "still_alive": 0, "game_alive": 0},
@@ -147,13 +147,14 @@ def body(args, state, log):
         # 自行手动关闭，不询问用户。」
         #
         # ⚠️ 旧实现在这里只看 `window.running(prog)`（**目标程序自己**）。
-        # 但用户说的这个情形里，ok-ww 进程**恰恰是已经退出的那一个** ——
-        # 留下的是**游戏** `Client-Win64-Shipping.exe`。于是旧代码会打印
-        # 「ok-ww 进程已不在 —— 无残留，无需清理」**而游戏仍在跑**，
+        # 但用户说的这个情形里，目标程序进程**恰恰是已经退出的那一个** ——
+        # 留下的是**游戏**（ok-ww 是 Client-Win64-Shipping.exe，
+        # ok-nte 是 HTGame.exe/NTEGame.exe）。于是旧代码会打印
+        # 「进程已不在 —— 无残留，无需清理」**而游戏仍在跑**，
         # 属于「报了个让人以为一切干净的结论」（同 FAULT #31/#32）。
         if game and not alive:
             log(f"  ⚠ 游戏侧仍有 {len(game)} 个进程存活：{[(n, p) for n, p, _ in game]}")
-            log("    这正是「今日任务已完成、ok-ww 异常退出」的典型残留。")
+            log("    这正是「今日任务已完成、目标程序异常退出」的典型残留。")
             log("    按用户裁定：**自行收尾，不询问**（关窗口 + 终止游戏进程）。")
             # ⚠️ 必须走 watchdog.force_close，**不能**只依赖下面的
             # run_cleanup：后者按 process_prefix 只杀**目标程序目录下**的进程，
