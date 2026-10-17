@@ -67,6 +67,10 @@ def extra_args(ap):
                     help=f"计时器冻结多少秒后判超时（默认 {FREEZE_SECONDS:.0f}）")
     ap.add_argument("--total-timeout", type=float, default=TOTAL_TIMEOUT,
                     help=f"整条链兜底上限（秒），默认 {TOTAL_TIMEOUT:.0f}")
+    ap.add_argument("--stall-grace", type=float, default=NTE_STALL_GRACE_SECONDS,
+                    help="检测到执行器暂停后，再给这么多秒自行恢复；"
+                         f"仍无进展则判 STALLED（默认 {NTE_STALL_GRACE_SECONDS:.0f}）。"
+                         "调小它可以在不真等 90s 的情况下验证 STALLED 分支")
     ap.add_argument("--only-locate", action="store_true",
                     help="只跑 8a 导航 + 8b 定位，不点击、不等待")
     ap.add_argument("--adopt-frame", default=None,
@@ -629,9 +633,9 @@ def wait_for_nte_completion(state, args, log, window_log=None):
             if stall_since is None:
                 stall_since = now
                 log(f"  [注意] {why}")
-                log(f"  [注意] 给它 {NTE_STALL_GRACE_SECONDS:.0f}s 自行恢复"
+                log(f"  [注意] 给它 {args.stall_grace:.0f}s 自行恢复"
                     f"（实测恢复窗口有时有效、有时无效）…")
-            elif now - stall_since > NTE_STALL_GRACE_SECONDS:
+            elif now - stall_since > args.stall_grace:
                 return STALLED, (f"ok-nte 执行器已暂停 {now - stall_since:.0f}s 无任何进展"
                                  f"：{why}"), None
         else:

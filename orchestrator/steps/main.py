@@ -69,6 +69,9 @@ PASSTHROUGH = [
     ("only_locate", "8", "--only-locate", False),
     ("total_timeout", "8", "--total-timeout", True),
     ("freeze_seconds", "8", "--freeze-seconds", True),
+    # FAULT #30 的 STALLED 分支默认要等 90s 才判死；转发出去是为了让
+    # 验证/SELFTEST 能把它调小，不必真等一分半。
+    ("stall_grace", "8", "--stall-grace", True),
     ("force_clean", "9", "--force", False),
 ]
 
@@ -124,6 +127,9 @@ def build_parser():
                    help="[节点 8] 计时器冻结多少秒后判超时")
     g.add_argument("--total-timeout", type=float, default=None,
                    help="[节点 8] 整条链兜底上限（秒）")
+    g.add_argument("--stall-grace", type=float, default=None,
+                   help="[节点 8] 执行器暂停后给它多少秒自行恢复；"
+                        "仍无进展才判 STALLED（默认 90）")
     g.add_argument("--force-clean", action="store_true",
                    help="[节点 9] 忽略结果，强制走清理路径")
 
