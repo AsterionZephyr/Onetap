@@ -28,6 +28,32 @@
 也**不能**写死 `pythonw.exe`（机器上同时有别的 pythonw，如图中
 `searxng-master\\.venv\\Scripts\\pythonw.exe`、`D:\\WORKs\\Anaconda\\pythonw.exe`）。
 
+## ⚠️ FAULT #34：`process_prefix` 只覆盖第二层，第一层是**隐身**的
+
+上面那条判据只覆盖了**第二层**（`data/apps/<name>/`）。两个程序的**第一层**
+`*.exe` 都装在 `root_dir` **下、`process_prefix` 之上**：
+
+    ok-nte : E:\\TOOLS\\ScriptsGames\\ok-nte\\ok-nte.exe          <- 不在 prefix 下
+             E:\\TOOLS\\ScriptsGames\\ok-nte\\data\\apps\\ok-nte  <- prefix 指向这
+
+于是 `owns_process(第一层) == False` ⇒ **框架看不见第一层**。这一条引发了两个
+互相独立的故障（2026-10-17 实机坐实）：
+
+1. **残留的第一层 shell 劫持下一次运行**：ok-nte 第一层是个 Tauri 启动器，
+   界面上有个「▶ 启动应用」按钮。若上一次运行把它留了下来（第一层**不会**
+   自行退出，实测 pid 26892 存活 48s 以上、命令行
+   `E:\\TOOLS\\ScriptsGames\\ok-nte\\ok-nte.exe`），它持有的是一个
+   **与第二层同名的窗口**（标题就是 `ok-nte`，类 `Tauri Window`），
+   但它**不会**替我们把第二层拉起来 —— 它只是停在那里等点击。
+2. **`window.running()` 对第一层返回空** ⇒ 前置清理（`--pre-clean`）与
+   收尾都**杀不掉**残留的第一层，故障会一轮一轮复现。
+
+**修法**：归属判据从「单个前缀」放宽为「**前缀列表**」，把第一层的 exe
+所在的 `root_dir` 也算进去，但根目录这一条必须**排除另一个程序**（两程序都
+装在 `E:\\TOOLS\\ScriptsGames\\` 下，用共同父目录会连带杀掉对方，见 FAULT #32）。
+`process_prefixes` 由 `process_prefix`（第二层，精确）与 `root_dir`（第一层，
+需再按 exe 名收窄）两部分组成，见 `owns_process`。
+
 ## 已核实的路径（2026-10-16 实机）
 
     ok-ww : E:\\TOOLS\\ScriptsGames\\ok-ww\\ok-ww.exe
@@ -57,10 +83,10 @@ class Program:
     display         : 人类可读名（日志用）
     exe             : 第一层可执行文件的**绝对路径**
     root_dir        : 安装根目录（`okww_running` 等归属判定用）
-    process_prefix  : **进程归属判据** —— 进程 exe 路径需以此前缀开头。
+    process_prefix  : **进程归属判据（第二层）** —— 进程 exe 路径需以此前缀开头。
                       指向 `data/apps/<name>` 这一层，见模块 docstring 的警告。
     process_names   : 用于 `list_processes` 的候选进程名（只是**缩小扫描面**，
-                      真正的归属判定是 process_prefix）
+                      真正的归属判定是 process_prefix + first_layer_exe）
     title_re        : 完整标题正则（就绪后形态）
     loose_title_re  : 宽松标题正则（第二层刚起、标题尚未成完整形态）
     ready_title_re  : 就绪判据用的标题正则（通常同 title_re）
@@ -80,6 +106,9 @@ class Program:
         self.ready_title_re = ready_title_re
         self.min_width = min_width
         self.min_height = min_height
+        # FAULT #34：第一层 exe 的**精确路径**。第一层不在 process_prefix 下，
+        # 单靠前缀看不见它 ⇒ 残留的第一层会劫持下一次运行且杀不掉。
+        self.first_layer_exe = os.path.normcase(os.path.abspath(exe))
         # 目标游戏的进程名（用于超时兜底关闭）。**不能**用 exe 路径判定归属
         # —— 游戏装在 D:\GAMES\ 之类的目录下，与目标程序毫无路径关系。
         self.game_names = list(game_names or [])
@@ -87,14 +116,22 @@ class Program:
         self.game_title_re = game_title_re or ""
 
     def owns_process(self, exe_path):
-        """该进程是否属于本程序（按工作目录前缀判定）。
+        """该进程是否属于本程序。
+
+        判据**两条并集**（FAULT #34）：
+          1. 路径以 `process_prefix` 开头 —— 第二层（`data/apps/<name>/`）。
+          2. 路径**恰好等于** `first_layer_exe` —— 第一层启动器。
+
+        ⚠️ 第 2 条必须用**精确相等**而不是 `root_dir` 前缀：两程序都装在
+        `E:\\TOOLS\\ScriptsGames\\` 下，用根目录前缀会把**对方**也算进来
+        （FAULT #32 的同一个坑）。精确相等既覆盖第一层，又天然排除对方。
 
         ⚠️ 返回 False 而非抛异常：调用方在做**发现**，不是在断言。
         """
         if not exe_path:
             return False
-        return os.path.normcase(os.path.abspath(exe_path)).startswith(
-            self.process_prefix)
+        p = os.path.normcase(os.path.abspath(exe_path))
+        return p.startswith(self.process_prefix) or p == self.first_layer_exe
 
     def title_matches(self, title, ready=False):
         """标题是否像本程序。ready=True 时要求完整形态（含版本号）。
@@ -194,8 +231,44 @@ _TITLE_CASES = [
 ]
 
 
+def _ownership_problems():
+    """归属判据自检（FAULT #34）。
+
+    必须同时成立三件事，缺任何一件都会静默出错：
+      1. **两层都认**：第一层 exe（在 root_dir 下、process_prefix 之上）
+         与第二层（在 process_prefix 下）都要 `owns_process == True`。
+         漏了第一层 ⇒ 残留 shell 看不见也杀不掉，劫持下一次运行。
+      2. **第二层真的在 prefix 下**：写错 process_prefix 会表现为
+         「找不到进程」，不报错。
+      3. **绝不认对方的第一层**：两程序同装在 `E:\\TOOLS\\ScriptsGames\\`
+         下，归属判据一旦放宽成根目录前缀就会连带杀掉对方（FAULT #32）。
+    """
+    problems = []
+    for prog in ALL:
+        if not prog.owns_process(prog.exe):
+            problems.append(
+                f"{prog.display} 归属判据认不出**第一层** {prog.exe!r} "
+                f"（process_prefix={prog.process_prefix!r}）"
+                f" —— 残留的第一层会不可见且杀不掉（FAULT #34）")
+        second = os.path.join(prog.root_dir, "data", "apps",
+                              "ok-" + prog.key, "python", "pythonw.exe")
+        if not prog.owns_process(second):
+            problems.append(
+                f"{prog.display} 归属判据认不出**第二层** {second!r}"
+                f"（process_prefix={prog.process_prefix!r}）")
+        for other in ALL:
+            if other is prog:
+                continue
+            if prog.owns_process(other.exe):
+                problems.append(
+                    f"{prog.display} 把 {other.display} 的第一层 "
+                    f"{other.exe!r} 也算成自己的 —— 清理时会误杀另一个程序"
+                    f"（FAULT #32 型）")
+    return problems
+
+
 def self_check():
-    """校验标题判据；返回问题描述列表（空列表 = 通过）。"""
+    """校验标题判据与归属判据；返回问题描述列表（空列表 = 通过）。"""
     problems = []
     for prog, title, want_loose, want_ready in _TITLE_CASES:
         got_loose = prog.title_matches(title, ready=False)
@@ -210,6 +283,7 @@ def self_check():
         if want_ready and not prog.title_matches(title, ready=False):
             problems.append(f"{prog.display} 标题 {title!r}: "
                             f"ready=True 但 loose=False（判据不自洽）")
+    problems.extend(_ownership_problems())
     return problems
 
 
