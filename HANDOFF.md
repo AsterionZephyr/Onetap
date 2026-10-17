@@ -432,6 +432,34 @@ for target in 配置的顺序:
 验证靠 `probe/_probe_gui_target_wire.py`（用 Tk 的 API 直接调**真实的 `on_run`**，
 把 `Runner` stub 掉看拼出的 argv）—— **不要靠人肉点击复核**，原因见 §10.7。
 
+✅ **GUI 端到端实证（2026-10-17，`run-20261017-140330`）**：
+上面那个探针只证明「argv 拼对了」，**不证明 GUI 能真的把链跑起来**。为此新增
+`probe/_probe_gui_both_live.py`：建**真的** `App`（真窗口、真 `Runner`、真
+`StateWatcher`），把目标下拉框设成「两个都跑」，调**真实的 `App.on_run()`**，
+再由探针自己抽 Tk 事件循环、收集 bus 上的日志与节点状态。
+
+结果 **8/8 核对项通过、EXIT=0**，全程 759.5s：
+
+| 轮 | 结果 | 用时 | 节点 8 |
+| --- | --- | --- | --- |
+| 1 ok-ww | 8/8 全过 | 258s | `completed`（终止标记；`hwnd=789000`，1458x800 @(495,417)）|
+| 2 ok-nte | 8/8 全过 | 499s | `completed`，`success=['一咖舍','影院约会','喷泉签到','异象家具','羁遇赠礼'] failed=['日常领取'] skipped=['异象界域','异象追猎']` |
+
+日志里逐条出现 `--target both` / 「串联第 1 轮」/「串联第 2 轮」/「串联汇总」/
+「串联复检」，且**两轮各有一套 all-ok 的节点状态**。
+
+⚠️ 两个**探针自身的坑**（都已修，写下来免得再踩）：
+
+1. **不能只看 bus 推来的节点状态**。`bus.node` 只在**状态变化**时触发，而短跑
+   （`--dry-run` 约 2.5s）会在 Tk 的 `after` 轮询第一次跑起来**之前**就结束，
+   于是收集到的 `nodes` 恒为空 —— 实测干跑那次 `nodes` 实得 0 组 ok，但
+   `state.json` 里 `ww`/`nte` 都是 `{'1':'ok'}`。**权威来源是落盘的 `state.json`**。
+   这与 FAULT #18/#20/#27 同一形状：**单看一个信号就下结论，必然误判**。
+2. **ok-ww 侧出现 67 次 `[INV-13] 本轮抓帧失败：帧几乎全黑`，那不是故障**。
+   时序显示它**与正常帧交错出现**（指纹 40.00 → 全黑 → 105.55/107.15 → 全黑 →
+   140.70/167.13），是游戏窗口在 ok-ww 的转场/加载瞬间短暂不可抓；框架如实报
+   INV-13 后继续采样，任务最终正常完成。⇒ **黑帧本身不等于失败，要看它是否恢复**。
+
 ---
 
 ## 10. 工作方式建议（血泪教训）
@@ -462,6 +490,7 @@ for target in 配置的顺序:
 | `probe/capture.py` | 窗口发现、抓帧、帧统计、PNG 落盘 |
 | `probe/template_probe.py` | `match_template`（归一化互相关）、`capture_okww` |
 | **`probe/_probe_gui_target_wire.py`** | **GUI 目标选择器接线验证**（调真实 `on_run`，stub `Runner` 看 argv） |
+| **`probe/_probe_gui_both_live.py`** | **GUI 端到端：用真实 App 驱动 `--target both`**。建真的 `App`、把目标选择器设成「两个都跑」、调**真实的 `App.on_run()`**、自己抽 Tk 事件循环（`--dry-run` 2.5s 冒烟；不带参数真跑约 12 分钟）。核对项含「两轮各有一套 all-ok 的节点状态」，**取自 `state.json`** 而非 bus 推送 —— 短跑会在 `after` 轮询启动前就结束，只看 bus 会误判成 0 组 ok |
 | **`probe/_probe_ww_sessions.py`** | **把 ok-ww 日志按会话切开列结局**。会话边界用 `ok:ok-script init`，**不能按 `ok:quit app`** —— 异常退出的会话根本不写后者。用来找「没跑完」的真实样本 |
 | **`probe/_probe_ww_unknown_cleanup.py`** | **ok-ww UNKNOWN + 游戏残留 自动收尾回归**（三层：真实历史会话判据 / 分支静态检查 / `--live` 真起游戏端到端） |
 | **`probe/_probe_unknown_cleanup.py`** | **ok-nte 侧同一路径的回归**（纯静态 + 只读，随时可跑） |
