@@ -481,6 +481,14 @@ for target in 配置的顺序:
    - 视觉：`desktop_capture` **抓图**仍然有效（抓图与输入是两条通道），
      配合 `docs/_probe_gui2_visual.py` 等自检。
 
+8. **长跑子进程的 stdout 不要挂到「没人读的 PIPE」上（FAULT #36，2026-10-18 实测）。**
+   `subprocess.PIPE` 且父进程不读 ⇒ 管道缓冲（64 KiB）写满后，子进程**连同它自己
+   `subprocess.run` 拉起的孙进程**一起阻塞在 write 上，整轮**静默挂死**：不抛异常、
+   无退出码、输出文件恒 0 字节，表面看像「编排卡在节点 5」。
+   诊断特征（这次逐条对上）：进程存活但 **CPU 仅 0.0x 秒**、**RSS 只有 ~19 MB**
+   （连 numpy 都没 import）、线程 `WaitReason=Executive`、父子两进程栈顶同为 `write`。
+   ⇒ 长跑一律 `stdout=open(输出文件, "w")`，或起 reader 线程把管道抽干。
+
 ---
 
 ## 11. 关键产物索引
@@ -498,6 +506,7 @@ for target in 配置的顺序:
 | **`probe/_probe_foreground.py`** | **抢前台**静态 12 项 + live 实测（FAULT #29：裸调 `SetForegroundWindow` 被前台锁挡住会永久失败） |
 | **`probe/_probe_foreground_click.py`** | **抢前台的最后一手**回归（FAULT #35：游戏窗口占前台时 API 全败，必须真实点击窗口体）。静态 AST 接线 + 打桩语义 + 只读几何，**不依赖 live 复现**（该病态状态偶发、事后无法按需重建） |
 | **`probe/_probe_executor_pause.py`** | **执行器暂停**诊断（FAULT #30：`pos_invalid: (-32000, -32000)` 哨兵坐标）。含 `ok-script.2026-10-12.log` 作**负向**用例 |
+| **`probe/_probe_stalled_live.py`** | **FAULT #30 的 STALLED 分支——真实卡死驱动**。**2026-10-18 已跑通（闭环）**：等业务行 → `ShowWindow(SW_MINIMIZE)` 返回 True → 哨兵 `og.executor.pause pos_invalid:(-32000,-32000)` → 节点 8 用时 135.8s 判 `failed` / `data.result='stalled'` → `state.result='stalled'`、主控退出码 3，即「STALLED 映射 failed 而非 timeout」成立。证据 `logs/runs/stalled-live-20261018-061325`。⚠️ 用法上踩过 FAULT #36（见 §10 第 8 条）：主控 stdout 必须落**文件**，不能挂**不读的 PIPE** |
 | **`legacy/probe-investigation/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
 | **`legacy/probe-investigation/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
 | **`probe/nte_main.py`** | `all_hits` **唯一性检查工具**（被多个脚本复用） |

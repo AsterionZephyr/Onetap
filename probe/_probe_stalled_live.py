@@ -8,8 +8,17 @@
     `og.executor.pause pos_invalid: (-32000, -32000)`）
     → 先给 `--stall-grace` 秒自行恢复 → 仍无任何业务行/收尾动作 → 判 STALLED
 
-这段逻辑此前**只在单元测试和真实历史日志回归**里验过，
-**从没在真实卡死场景下真的走到过 STALLED**。本脚本就是去补这一刀。
+这段逻辑此前**只在单元测试和真实历史日志回归**里验过。
+**2026-10-18 06:13:25 已用本脚本在真实卡死场景下跑通**（`--stall-grace 90`，正式值）：
+
+    [阶段1] 已出现业务行 2 条 → ShowWindow(SW_MINIMIZE) 返回 True
+    [哨兵] 06:14:32,699 ERROR update_window_size hwnd_window:og.executor.pause
+            pos_invalid: (-32000, -32000, 0, 0)
+    → 节点 8 用时 135.8s，status=failed，data.result='stalled'
+    → state.result='stalled'，主控退出码 3
+    → run-dir: logs/runs/stalled-live-20261018-061325
+
+即「STALLED 映射为 **failed**（不是 timeout）」这条设计判据成立。
 
 ## 为什么需要它，而不是手工点
 
@@ -131,11 +140,22 @@ def main():
     # 日志基线：从这里开始看新增内容
     base = os.path.getsize(NTE_LOG) if os.path.exists(NTE_LOG) else 0
     off = base
-    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE,
+
+    # ⚠️ FAULT #36（2026-10-18 实测）：**必须把主控 stdout 写进文件，不能用 PIPE**。
+    #    原来的 `stdout=subprocess.PIPE` 在这段循环里**从不读取**，而主控与它
+    #    `subprocess.run` 拉起的每个节点**继承同一个管道写端**。管道缓冲（64KB）
+    #    写满后，主控和节点全部阻塞在 write 上 —— 整轮静默挂死，无异常、无退出码。
+    #    实测现场：step5 节点存活 16 分钟、CPU 仅 0.03s、RSS 19MB（还没 import numpy）、
+    #    线程 WaitReason=Executive、step5.log 恒为 0 字节 —— 就是「第一次写管道就卡住」。
+    main_out = os.path.join(rd, "main.out.log")
+    os.makedirs(rd, exist_ok=True)
+    out_f = open(main_out, "w", encoding="utf-8", errors="replace")
+    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=out_f,
                             stderr=subprocess.STDOUT, text=True,
                             encoding="utf-8", errors="replace",
                             creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-    log("主控已启动（后台），开始盯 ok-nte 的业务行与终端标记…")
+    log(f"主控已启动（后台），stdout -> {main_out}")
+    log("开始盯 ok-nte 的业务行与终端标记…")
 
     minimized = False
     min_at = None
@@ -206,11 +226,17 @@ def main():
         # --- 等主控收尾 ---
         log("等待主控结束…")
         try:
-            out, _ = proc.communicate(timeout=200)
+            proc.wait(timeout=200)
         except subprocess.TimeoutExpired:
             proc.kill()
-            out, _ = proc.communicate()
+            proc.wait()
         rc = proc.returncode
+        try:
+            out_f.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        with open(main_out, "r", encoding="utf-8", errors="replace") as f:
+            out = f.read()
 
     finally:
         # --- 必须恢复窗口，并把现场清干净 -------------------------------
@@ -234,6 +260,10 @@ def main():
             log(f"  leftover = {r.get('leftover')}")
         except Exception as e:  # noqa: BLE001
             log(f"  清理失败（忽略）：{e!r}")
+        try:
+            out_f.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     # --- 判定 -----------------------------------------------------------
     print("\n" + "=" * 74)
@@ -247,23 +277,30 @@ def main():
     log(f"是否最小化过 = {minimized}")
     log(f"盯梢结束原因 = {status}")
 
-    stalled_seen = "STALLED" in (out or "")
-    log(f"主控输出里出现 STALLED = {stalled_seen}")
-    if stalled_seen:
-        for line in (out or "").splitlines():
-            if "STALLED" in line or "执行器已暂停" in line or "stalled" in line:
-                log(f"    {line.strip()[:130]}")
-
+    # ⚠️ 判定必须以 **state.json 的 result 为准**，不能只 grep stdout 的大写 "STALLED"。
+    #    2026-10-18 实测踩过：主控把结论写成小写 `stalled`（`[结果] stalled：...`），
+    #    只 grep 大写会**把已经触发成功的轮次误报为「未触发」**。
     st = os.path.join(rd, "state.json")
+    state_result = None
     if os.path.exists(st):
         import json  # noqa: PLC0415
         d = json.load(open(st, encoding="utf-8"))
-        log(f"state.result = {d.get('result')!r}")
+        state_result = d.get("result")
+        log(f"state.result = {state_result!r}")
         log(f"state.result_detail = {str(d.get('result_detail'))[:150]!r}")
         step8 = (d.get("steps") or {}).get("8") or {}
-        log(f"steps.8.result = {step8.get('result')!r}")
-        log(f"steps.8.detail = {str(step8.get('detail'))[:150]!r}")
+        log(f"steps.8.status = {step8.get('status')!r}")
+        log(f"steps.8.data = {str(step8.get('data'))[:200]!r}")
     log(f"运行目录 = {rd}")
+
+    stalled_seen = (state_result == "stalled"
+                    or "stalled" in (out or "").lower()
+                    or "执行器已暂停" in (out or ""))
+    log(f"确认 STALLED（state.result 或主控输出）= {stalled_seen}")
+    if stalled_seen:
+        for line in (out or "").splitlines():
+            if "stalled" in line.lower() or "执行器已暂停" in line:
+                log(f"    {line.strip()[:130]}")
 
     print("\n" + "=" * 74)
     if stalled_seen:

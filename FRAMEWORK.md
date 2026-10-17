@@ -514,6 +514,28 @@ UNKNOWN : 其他（证据不足不报成功）
 
 ⇒ **ok-nte 的结果粒度比 ok-ww 好**：能报出"哪几项成功、哪项失败、哪项跳过"。
 
+**STALLED（执行器暂停）—— 2026-10-18 真机闭环**
+
+ok-nte 的游戏窗口被最小化时，执行器先写哨兵
+`update_window_size hwnd_window:og.executor.pause pos_invalid: (-32000, -32000, 0, 0)`，
+然后**永久停住**（不抛异常、不写终止标记、不退出）。判据链：节点 8 先给
+`--stall-grace`（默认 **90s**）自行恢复；期间**零业务行 + 零收尾动作** ⇒ 判 `failed`
+且 `data.result='stalled'`，`state.result='stalled'`，主控退出码 **3**。
+
+实测（`probe/_probe_stalled_live.py --stall-grace 90`，run-dir `logs/runs/stalled-live-20261018-061325`）：
+
+```
+[阶段1] 已出现业务行 2 条 → ShowWindow(SW_MINIMIZE) = True
+[哨兵]  06:14:32,699 ERROR ... og.executor.pause pos_invalid: (-32000, -32000, 0, 0)
+节点 8  用时 135.8s，status=failed，data.result='stalled'
+state   result='stalled'，主控退出码 3
+```
+
+⇒ **STALLED 映射为 `failed`，不是 `timeout`** ——「停住了」是**确定**的失败，
+  不该再空等到运行超时上限（`orchestrator.py` 的 `stalled` 终态即此语义）。
+⇒ 反向约束：判定以 `state.json` 的 `result` 为准；**主控把结论写成小写 `stalled`**，
+  只 grep 大写 `STALLED` 会把已成功的轮次误报成「未触发」（本次踩过，探针已改）。
+
 ### 3.9 「本次运行」的文本窗口（**INV-36/37 的来源**）
 
 **⚠️ `ok:quit app` 不能作为"运行边界"** —— 被**外部强制终止**的运行不会写该标记，
