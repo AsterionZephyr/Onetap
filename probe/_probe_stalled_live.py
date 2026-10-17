@@ -92,8 +92,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stall-grace", type=float, default=20.0,
                     help="传给节点 8 的 --stall-grace（默认 20，正式值是 90）")
-    ap.add_argument("--wait-business", type=float, default=420.0,
-                    help="最多等多久等到 ok-nte 写出业务行")
+    ap.add_argument("--wait-business", type=float, default=900.0,
+                    help="最多等多久等到 ok-nte 写出业务行。**必须给够**："
+                         "实测 ok-nte 从启动到真正开始跑日常要 ~6.5 分钟"
+                         "（12:06:45 launcher 就绪 → 12:13:13 才开始日常），"
+                         "默认 420s 会在业务行出现前 11 秒就放弃")
     ap.add_argument("--hold", type=float, default=150.0,
                     help="最小化之后最多观察多久")
     ap.add_argument("--run-timeout", type=float, default=900.0,
@@ -167,8 +170,18 @@ def main():
                     min_at = now
                 elif now - t_start > args.wait_business:
                     status = "等业务行超时"
+                    h_now, t_now = game_main_hwnd()
                     log(f"[阶段1] 等了 {args.wait_business:.0f}s 仍没等到"
                         f"「业务行 + 游戏主窗口」同时成立 —— 放弃，如实报告")
+                    log(f"        业务行 {len(biz_lines)} 条；"
+                        f"游戏主窗口 {'有' if h_now else '无'}"
+                        f"{f' hwnd={h_now} {t_now!r}' if h_now else ''}")
+                    if not biz_lines:
+                        log("        ⇒ 注意区分两种情况：")
+                        log("          (a) 等太短了 —— ok-nte 从启动到真跑日常"
+                            "实测约 6.5 分钟，budget 要 >400s")
+                        log("          (b) ok-nte 直接收尾了（今日已完成）——"
+                            "看它的汇总行/终止标记")
                     break
 
             # 第 2 阶段：最小化之后盯 STALLED
