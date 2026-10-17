@@ -9,6 +9,11 @@
      保证该坐标没被覆盖。
 
 `ensure_foreground` 实现「无条件抢」（Q4 决策）；`guarded_click` 实现动作前置关。
+
+⚠️ **FAULT #35**：`ensure_foreground` 抢前台有三条通道，**前两条是 API，最后一条是
+真实点击**。游戏窗口（`UnrealWindow`）占住前台时，API 两条**永远失败**（重试无用，
+最小化游戏也不释放），只有**在窗口体上真实点击一次**才拿得回来。
+详见 `_click_to_activate` 的 docstring。
 """
 
 import time
@@ -18,6 +23,43 @@ from .errors import GuardFailure
 
 FOREGROUND_TRIES = 10        # 抢前台的尝试次数
 FOREGROUND_INTERVAL = 0.4    # 每次间隔（秒）
+
+
+def _click_to_activate(hwnd, log=None):
+    """最后一手：**在目标窗口体上真实点击一次**，用系统认可的用户输入夺取前台。
+
+    ⚠️ FAULT #35（实测 2026-10-17）：游戏窗口（`UnrealWindow`，异环）占住前台后，
+    `set_foreground` 的三手段（裸调 / AttachThreadInput / ALT 抖动）**全部无效且
+    永不成功** —— 实测连续 10 次全败；把游戏**最小化也不释放**前台。
+    但**真实鼠标点击目标窗口体一次**即可立即夺回，且随后 `ensure_foreground`
+    立即通过（实测 3/3）。
+
+    HANDOFF §2.2 第 5 条早就写了「窗口拉不到前台时，**真实鼠标点击窗口体**
+    能拿到激活」—— 但 `ensure_foreground` 此前**从未实现这一手**，于是节点 7
+    直接以 INV-8 失败并**中断整条链**。
+
+    点哪里：窗口**顶部**（标题栏区域）横坐标偏左 1/5 处。理由：
+      · 避开右上角的最小化/最大化/关闭按钮；
+      · 避开窗口主体里可能存在的可交互控件（点击它会产生副作用）；
+      · 标题栏拖动需要按下+移动，单纯单击不会拖动窗口。
+    仅当该点确实落在窗口 rect 内时才点。
+    """
+    st = win32.window_state(hwnd)
+    if st is None:
+        return False
+    if st["width"] < 100 or st["height"] < 40:
+        return False
+    x = st["left"] + max(20, st["width"] // 5)
+    y = st["top"] + min(18, st["height"] // 8)
+    if log:
+        log(f"  置前台 API 全部失效 —— 改用在窗口体上真实点击 ({x},{y}) 夺取激活")
+    try:
+        win32.click(x, y)
+    except Exception:                                     # noqa: BLE001
+        return False
+    time.sleep(0.6)
+    st2 = win32.window_state(hwnd)
+    return bool(st2 and st2["foreground"])
 
 
 def ensure_foreground(hwnd, tries=FOREGROUND_TRIES, interval=FOREGROUND_INTERVAL,
@@ -63,10 +105,21 @@ def ensure_foreground(hwnd, tries=FOREGROUND_TRIES, interval=FOREGROUND_INTERVAL
             log(f"  置前台 attempt {attempt}: 未取得前台，重试")
         time.sleep(interval)
 
+    # --- 最后一手：真实点击夺取激活（FAULT #35）---
+    # API 三手段全败时，HANDOFF §2.2 第 5 条的「真实鼠标点击窗口体」仍然有效。
+    # 放在循环**之外**：它不是「再试一次 API」，而是换一条通道，试多次无意义。
+    if _click_to_activate(hwnd, log=log):
+        st = win32.window_state(hwnd)
+        if st and st["foreground"]:
+            if log:
+                log("  置前台成功（改用真实点击夺取激活）")
+            return st
+
     raise GuardFailure(
         "INV-8",
-        f"连续 {tries} 次未能把目标程序置前台 —— 真实光标点击会落到别处，"
-        f"且它会静默挂起。请让开鼠标或关闭遮挡窗口后重试")
+        f"连续 {tries} 次未能把目标程序置前台，且真实点击窗口体也未能夺取激活 —— "
+        f"真实光标点击会落到别处，且它会静默挂起。"
+        f"请让开鼠标或关闭遮挡窗口后重试")
 
 
 def assert_top_window(hwnd, screen_x, screen_y):
