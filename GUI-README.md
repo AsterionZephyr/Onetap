@@ -42,6 +42,43 @@
 
 ## 2. 怎么开
 
+### 2.1 双击就开（推荐）
+
+**双击仓库根目录的 `gui.bat`** 即可，不用开终端、不用记命令。
+
+也可以在命令行里带参数透传：
+
+```bat
+gui.bat                  :: 直接开界面（自己弹 UAC）
+gui.bat --dry-run        :: 启动时预勾选 dry-run
+gui.bat --only 8         :: 启动时预选「只跑节点 8」
+gui.bat --no-elevate     :: 明确不提权（调试用）
+```
+
+`gui.bat` 只做四件事，**决策逻辑一行都不复制**（否则会和 Python 侧漂移，
+出现"bat 提权了、python 又提权一次"）：
+
+1. `cd` 到仓库根（`python -m gui` 只在仓库根才能解析到 `gui` 包）；
+2. 选解释器：优先读环境变量 `ONETAP_PYTHON`，否则用 `D:\WORKs\Anaconda\python.exe`；
+3. 前置检查：解释器不在、或缺 `tkinter`，立刻给一句人话 + `pause`，
+   而不是让黑窗一闪而过；
+4. 启动 `"%PY%" -X utf8 -m gui %*`，参数原样透传，再按退出码给对应提示。
+
+**提权交互**：双击后会弹 UAC。点「是」→ 界面开在**另一个进程**里，
+这个黑窗会**立刻关闭**（正常，不是崩溃）。点「否」→ 走降级路径，
+界面照开但有红横幅、节点 9 无法清理进程，bat 会停 6 秒把这点说清楚。
+
+退出码：`0` 正常（提权副本接手后父进程也是 0）· `3` UAC 被拒、降级运行 ·
+`4` 导入 GUI 模块失败（会顺带打印 `elevate-failed.log` 末尾 40 行）·
+`2` 解释器或 tkinter 缺失（启动前就拦下）。
+
+⚠️ **`gui.bat` 正文刻意全是 ASCII**。cmd 是**逐行、按当前代码页**解析 bat 的，
+而 `chcp 65001` 只影响它**之后**的执行 —— 文件里靠前的 UTF-8 中文会被当成
+ANSI 拆成碎片，cmd 就去执行那些碎片（实测报 `'断点式编排' is not recognized
+as an internal or external command`）。所以中文提示一律交给 Python 打印。
+
+### 2.2 手动命令
+
 ```powershell
 cd E:\TOOLS\ScriptsGames\Onetap
 & "D:\WORKs\Anaconda\python.exe" -X utf8 -m gui
