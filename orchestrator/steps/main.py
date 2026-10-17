@@ -234,6 +234,7 @@ def run_one(args, log, prog, run_dir, ids):
             state.set("result_detail",
                       f"整轮超过 {deadline.seconds:.0f}s 上限，已强制收尾")
             state.save()
+            _report_after_timeout(prog, log)
             break
 
         cmd = [args.python, "-m", f"orchestrator.steps.{mod}",
@@ -268,6 +269,30 @@ def run_one(args, log, prog, run_dir, ids):
         log(f"\n[主控] 节点 {sid} 退出码 {r.returncode}  用时 {elapsed:.1f}s")
 
         if r.returncode != 0:
+            # --- 节点是因为「整轮到点」才失败的吗？------------------------
+            # ⚠️ 实测踩过（2026-10-17）：到点检查（上面 :224）只在**每节开始前**
+            # 跑；节点 8 会拿到「剩余时间」当自己的兜底（见下面 :249），于是
+            # 它**抢先**在总上限到期时报 timeout 返回 3，主控这里直接 break ——
+            # :228 的 force_close **永远没机会执行**，游戏就留在场上。
+            # 实测现场留下 pythonw.exe + NTEGame.exe + HTGame.exe 共 3 个进程。
+            # ⇒ 这里必须补上同一条收尾路径。
+            if (deadline.seconds > 0 and not args.no_watchdog
+                    and deadline.expired()):
+                log(f"[主控] 节点 {sid} 未通过，且整轮时间上限已到"
+                    f"（{deadline.describe()}）—— 执行超时收尾")
+                watchdog_fired = watchdog.force_close(
+                    prog, reason="run-timeout", log=log,
+                    dry_run=args.dry_run, close_game=not args.keep_game)
+                state = context.RunState.load(run_dir, must_exist=False)
+                state.set("watchdog", watchdog_fired)
+                state.set("result", "timeout")
+                state.set("result_detail",
+                          f"整轮超过 {deadline.seconds:.0f}s 上限，已强制收尾"
+                          f"（节点 {sid} 报回 timeout）")
+                state.save()
+                _report_after_timeout(prog, log)
+                break
+
             log(f"[主控] 节点 {sid} 未通过 —— 链条在此停手")
             log(f"  => 修好代码后**只重跑这一节**：")
             log(f"     python -m orchestrator.steps.{mod} --run-dir \"{run_dir}\"")
@@ -278,6 +303,38 @@ def run_one(args, log, prog, run_dir, ids):
             log("  [--keep-going] 按参数继续下一节")
 
     return results, watchdog_fired
+
+
+def _report_after_timeout(prog, log):
+    """超时收尾之后复检一次，把「关没关干净」如实说出来。
+
+    ⚠️ 为什么不信任 force_close 的返回值：它返回的 `killed_game` 列表只统计
+    **强杀**的进程。游戏 launcher（`NTEGame.exe`）收到 WM_CLOSE 后会**自己
+    体面退出**，于是 `killed_game` 是空的，但游戏其实已经清干净了
+    （实测 2026-10-16/17 两次都是这样，见 FAULT #13 的措辞教训）。
+    ⇒ 一律**回读现场**再下结论，绝不拿「没强杀」当「没清掉」。
+    """
+    try:
+        left_t = window.running(prog)
+    except Exception:  # noqa: BLE001
+        left_t = []
+    try:
+        left_g = watchdog.game_processes(prog)
+    except Exception:  # noqa: BLE001
+        left_g = []
+
+    if not left_t and not left_g:
+        log("[超时收尾] 复检：目标程序与游戏均已退出 —— 收尾干净")
+    else:
+        if left_t:
+            log(f"[超时收尾] ⚠ 目标程序仍有 {len(left_t)} 个进程存活："
+                f"{[(n, i) for n, i, _ in left_t]}")
+        if left_g:
+            log(f"[超时收尾] ⚠ 游戏仍有 {len(left_g)} 个进程存活："
+                f"{[(n, i) for n, i, _ in left_g]}")
+        log("[超时收尾] 收尾不干净，需要人工处理："
+            "python -X utf8 -m orchestrator.steps.main --target "
+            f"{prog.key} --pre-clean")
 
 
 def main(argv=None):
