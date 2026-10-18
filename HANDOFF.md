@@ -275,6 +275,8 @@ orchestrator/
 ├── match.py       模板匹配、**唯一性检查**、`verify_identity`、`scan_row_button`
 ├── input.py       SetCursorPos + SendInput 点击
 ├── assets.py      图像资产登记（读 assets.json：图像 + 比例位置 + 出生尺寸 + 用途）
+├── programs.py    目标程序清单（`Program` 数据类；`ALL` 是**唯一来源**）
+├── targets.py     `--target` 表达式的解析与顺序（加程序不用改这里）
 ├── cleanup.py     按血缘清理（见 CLEANUP.md）
 ├── steps/         程序链条编排（九节点，见 §9）
 └── assets.json    当前加载的资产清单
@@ -348,7 +350,7 @@ ORDER = ["ok-ww", "ok-nte"]                 # 编排顺序（用户指定：ok-w
 | ~~ok-nte 自动退出~~ | ✅ **已确证**：正常完成后自行退出（同 ok-ww） |
 | ~~ok-nte 完成判定~~ | ✅ **已解决**：`nte_verdict` 用终止标记，不用按钮形态 |
 | ~~勾选状态管理~~ | ✅ **已决策**：**不需要检查**，由用户自行配置 |
-| ~~多程序串联~~ | ✅ **已实现**：`--target both`（ok-ww → ok-nte 各跑一轮），见 §9 |
+| ~~多程序串联~~ | ✅ **已实现**：`--target ww,nte`（按书写顺序各跑一轮；`all`/`both` 是全部的历史别名），见 §9 |
 | ~~ok-nte 收尾抢跑~~ | ✅ **已修**（FAULT #27）：见完成标记后给有界 settle 窗口，等它自己关游戏 |
 | **游戏 launcher 残留** | ok-nte 只关游戏本体 `HTGame.exe`，**留下 `NTEGame.exe`**（launcher，7~9 个窗口含托盘图标）。节点 9 已在 `completed` 分支报出，但按 Q3 **不主动杀**。⚠️ **清理时必须显式用跨程序入口** `watchdog.force_close(None, all_programs=True)` —— `force_close(None)` 的 `None` **不等于「全部」**，会回落到 `programs.DEFAULT`（ok-ww），只按 `Client-Win64-Shipping.exe` 查，然后报「游戏进程已全部退出」（**为真但误导**，见 FAULT #32） |
 | ~~「今日任务已完成」残留需人工收尾~~ | ✅ **已自动收尾**（2026-10-16）：用户裁定「遇到『每日任务已做完导致 ok-ww 失败且进程/游戏不退出』时**自行手动关闭，不询问用户**」。节点 9 的 `unknown` 分支原先只看 `window.running(prog)`（**目标程序自己**），而该情形里 ok-ww 进程**恰恰是已经退出的那一个**，留下的是**游戏** ⇒ 旧代码打印「无残留，无需清理」**而游戏仍在跑**。现改为**两者都查**，有游戏残留就走 `watchdog.force_close`。⚠️ 注意**不能只靠 `run_cleanup`**：它按 `process_prefix` 只杀目标程序目录下的进程，游戏根本不在那里。**已两程序各自端到端验证**：ok-nte 用 `NTEGame.exe`、ok-ww 用 `Client-Win64-Shipping.exe`，探针见 §11 |
@@ -415,27 +417,45 @@ for target in 配置的顺序:
 
 ### 9.1 GUI 的目标选择器
 
-控制条上有「目标」下拉框，四项与 `--target` 一一对应：
+**2026-10-18 改版**：从控制条上的单项下拉框（`TARGET_CHOICES` / `TARGET_ARG`，已删除）
+改为**左栏顶部的多选清单** —— 需求是「目标程序可任意多选，且提供全选」。
 
-| 下拉项 | 传参 |
+| 控件 | 传给 `steps/main.py` |
 | --- | --- |
-| 跟随记录（默认） | **不传** `--target` |
-| ok-ww | `--target ww` |
-| ok-nte | `--target nte` |
-| 两个都跑（先 ok-ww 后 ok-nte） | `--target both` |
+| `跟随上次记录（不传 --target）`（默认勾） | **不传** `--target` |
+| 勾 ok-ww / ok-nte（任意组合，顺序 = 清单声明顺序） | `--target ww` / `--target nte` / `--target ww,nte` |
+| `全选` / `清空` | 批量设置上面那一列（全选 = `--target ww,nte`） |
+| 一个都不勾 | **拒绝启动** + 清单下方红字告警 |
+
+⚠️ **一个都不勾 ≠ 全部**。省略 `--target` 的语义是「跟随记录」，把空选当全选
+是那种「跑完才发现跑错了程序」的静默失效。
 
 ⚠️ **「跟随记录」必须不传 `--target`**：它配合「接着上次」（`--resume`）续跑，
 此时目标由记录决定。若图省事写成 `args += ["--target", "ww"]`，
 **续跑 ok-nte 会被悄悄改回 ok-ww** —— 又一个静默失效。
-映射表在 `gui/app.py` 的 `TARGET_CHOICES` / `TARGET_ARG`。
 
-验证靠 `probe/_probe_gui_target_wire.py`（用 Tk 的 API 直接调**真实的 `on_run`**，
+⚠️ **跟随中勾一个程序会自动关掉跟随**（`App._on_target_chk`）。不自动关的话，
+界面显示「已勾 ok-ww」但实际仍按记录跑，用户会认定「勾选不灵」。
+
+清单来源是 `gui/targets.py`：用 `ast` **静态读** `orchestrator/programs.py` 的
+`Program(key=..., display=...)` 与 `ALL = [...]` 顺序（**不 import、不执行**），
+读不出来就回落 `FALLBACK` 并在界面告警 —— 与 `gui/chain.py` 同一笔交易：
+**GUI 是跳板**，节点代码或主控坏掉时还得能打开界面去改它。
+
+**每行行尾的进度点**是该程序**正在跑的那一轮**的进度（`○` / `▶ 3/8` / `3/8` /
+`✓ 8/8` / `✖ 2/8`），与勾选无关；**点目标行**（不是勾选框）把下方步骤列表
+切到该目标，串联时这是唯一能来回看两套节点状态的地方。
+`StateWatcher` 因此改成了**多目标**：同时扫 `<root>/state.json` 与
+`<root>/<target>/state.json`（串联时根目录没有 state.json，两轮各自一份），
+`poll()` 返回 `{target: raw}`，`bus.node` 事件带 target。
+
+验证：`probe/_probe_gui_target_wire.py`（用 Tk 的 API 直接调**真实的 `on_run`**，
 把 `Runner` stub 掉看拼出的 argv）—— **不要靠人肉点击复核**，原因见 §10.7。
 
 ✅ **GUI 端到端实证（2026-10-17，`run-20261017-140330`）**：
 上面那个探针只证明「argv 拼对了」，**不证明 GUI 能真的把链跑起来**。为此新增
 `probe/_probe_gui_both_live.py`：建**真的** `App`（真窗口、真 `Runner`、真
-`StateWatcher`），把目标下拉框设成「两个都跑」，调**真实的 `App.on_run()`**，
+`StateWatcher`），把目标清单**全选**（当年那版是下拉框的「两个都跑」），调**真实的 `App.on_run()`**，
 再由探针自己抽 Tk 事件循环、收集 bus 上的日志与节点状态。
 
 结果 **8/8 核对项通过、EXIT=0**，全程 759.5s：
@@ -513,6 +533,12 @@ for target in 配置的顺序:
    重试实现后 **0/8060**）。
    ⇒ **凡是「写 tmp + `os.replace`」的目标文件可能被别的进程读，就必须重试**
    （读侧单次持锁约 10 ms；本仓库用 12 次退避，合计 >0.6 s）。
+10. **ttk 在 vista 主题下把「disabled + 已勾」的 Checkbutton 画成空白灰方框**
+    （2026-10-18 截图实测）。也就是说：**置灰一个勾着的选项，看起来跟没勾一模一样**。
+    这不像报错、也不像崩溃，只让人以为「我明明勾了怎么没生效」。
+    ⇒ 要表达「这个开关暂时不生效」，**别用 `state="disabled"`**，改成
+    「控件保持可用 + 旁边写明当前语义 + 用户一动它就自动切过去」
+    （本仓库的做法：跟随中勾任意目标 = 自动关掉跟随）。
 
 ---
 
@@ -522,8 +548,10 @@ for target in 配置的顺序:
 | --- | --- |
 | `probe/capture.py` | 窗口发现、抓帧、帧统计、PNG 落盘 |
 | `probe/template_probe.py` | `match_template`（归一化互相关）、`capture_okww` |
-| **`probe/_probe_gui_target_wire.py`** | **GUI 目标选择器接线验证**（调真实 `on_run`，stub `Runner` 看 argv） |
-| **`probe/_probe_gui_both_live.py`** | **GUI 端到端：用真实 App 驱动 `--target both`**。建真的 `App`、把目标选择器设成「两个都跑」、调**真实的 `App.on_run()`**、自己抽 Tk 事件循环（`--dry-run` 2.5s 冒烟；不带参数真跑约 12 分钟）。核对项含「两轮各有一套 all-ok 的节点状态」，**取自 `state.json`** 而非 bus 推送 —— 短跑会在 `after` 轮询启动前就结束，只看 bus 会误判成 0 组 ok |
+| **`orchestrator/targets.py`** | **目标程序清单与 `--target` 解析的唯一入口**（`parse` / `keys` / `displays` / `describe` / `validate_choices_flag` / `self_check`）。清单本身来自 `programs.ALL`；`python -m orchestrator.targets --self-check` 是它的自检 |
+| **`gui/targets.py`** | **GUI 侧的目标清单**：用 `ast` 静态读 `programs.py`（不 import），读不出回落 `FALLBACK` 并告警 —— 让 GUI 在节点/主控代码坏掉时仍能打开 |
+| **`probe/_probe_gui_target_wire.py`** | **GUI 目标选择器接线验证**（调真实 `on_run`，stub `Runner` 看 argv；含空选拒绝、`all`/`none` 状态机） |
+| **`probe/_probe_gui_both_live.py`** | **GUI 端到端：用真实 App 驱动多目标串联**。建真的 `App`、把目标清单**全选**（得到 `--target ww,nte`）、调**真实的 `App.on_run()`**、自己抽 Tk 事件循环（`--dry-run` 2.5s 冒烟；不带参数真跑约 12 分钟）。核对项含「两轮各有一套 all-ok 的节点状态」，**取自 `state.json`** 而非 bus 推送 —— 短跑会在 `after` 轮询启动前就结束，只看 bus 会误判成 0 组 ok；另核对「每个目标行尾的进度点都不是空心」 |
 | **`probe/_probe_ww_sessions.py`** | **把 ok-ww 日志按会话切开列结局**。会话边界用 `ok:ok-script init`，**不能按 `ok:quit app`** —— 异常退出的会话根本不写后者。用来找「没跑完」的真实样本 |
 | **`probe/_probe_ww_unknown_cleanup.py`** | **ok-ww UNKNOWN + 游戏残留 自动收尾回归**（三层：真实历史会话判据 / 分支静态检查 / `--live` 真起游戏端到端） |
 | **`probe/_probe_unknown_cleanup.py`** | **ok-nte 侧同一路径的回归**（纯静态 + 只读，随时可跑） |

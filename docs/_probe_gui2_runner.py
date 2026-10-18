@@ -7,11 +7,11 @@
     & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 docs\\_probe_gui2_runner.py
 """
 
+import json
 import os
 import sys
 import threading
 import time
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -36,6 +36,54 @@ def check(name, ok, detail=""):
     print(f"  {'[OK]  ' if ok else '[FAIL]'} {name}" + (f"  {detail}" if detail else ""))
     if not ok:
         FAIL.append(name)
+
+
+def _state_files(run_dir):
+    """该运行目录下的全部 state.json（根 + 各子目录，与 StateWatcher._scan 一致）。"""
+    out = []
+    if not run_dir or not os.path.isdir(run_dir):
+        return out
+    p = os.path.join(run_dir, "state.json")
+    if os.path.isfile(p):
+        out.append(p)
+    for name in sorted(os.listdir(run_dir)):
+        sub = os.path.join(run_dir, name)
+        q = os.path.join(sub, "state.json")
+        if os.path.isdir(sub) and os.path.isfile(q):
+            out.append(q)
+    return out
+
+
+def _max_steps(run_dir):
+    """该目录里各 state.json 的最多节点数（挑夹具用）。"""
+    best = 0
+    for p in _state_files(run_dir):
+        try:
+            with open(p, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            continue
+        best = max(best, len(raw.get("steps") or {}))
+    return best
+
+
+def _find_run_dir_with_state(limit=40, min_nodes=1):
+    """从新到旧找一个真含 state.json 的运行目录。
+
+    最新目录可能刚建、还没写 state.json（或是个纯串联根目录），
+    也可能只有一两个节点的短跑（--only 1 的干跑）——
+    所以既不能只用 latest_run_dir()，也要能按「至少几个节点」筛。
+    """
+    root = chain.default_run_root()
+    try:
+        names = sorted(os.listdir(root), reverse=True)
+    except OSError:
+        return None
+    for name in names[:limit]:
+        d = os.path.join(root, name)
+        if os.path.isdir(d) and _state_files(d) and _max_steps(d) >= min_nodes:
+            return d
+    return None
 
 
 class Bus:
@@ -121,26 +169,42 @@ check("is_running() 变为 False", not r3.is_running())
 check("tasklist 里已无此 pid", not _in_tasklist(pid), f"pid={pid}")
 
 # ---------------------------------------------------------------- 4
+# StateWatcher 现在扫「根目录 + 各子目录」的 state.json（串联时是
+# <root>/ww/ 与 <root>/nte/ 各一份），poll() 返回 {target: raw}、推送带 target。
 print("\n4. StateWatcher 读真实的 state.json")
+# 夹具要求：至少 3 个节点（最新目录常常是 --only 1 的短跑，只有 1 个节点）
 rd = chain.latest_run_dir()
+if rd and (not _state_files(rd) or _max_steps(rd) < 3):
+    if _state_files(rd):
+        print(f"  （最新目录只有 {_max_steps(rd)} 个节点：{chain.rel(rd)}，往前找）")
+    else:
+        print(f"  （最新目录里没有 state.json：{chain.rel(rd)}，往前找）")
+    rd = _find_run_dir_with_state(min_nodes=3)
 check("找到了历史运行目录", rd is not None, chain.rel(rd) if rd else "无")
 if rd:
     bus4 = Bus()
     seen = []
+
     class B4(Bus):
-        def node(self, sid, name, status, note=None, elapsed=None):
-            seen.append((sid, status))
+        def node(self, target, sid, name, status, note=None, elapsed=None):
+            seen.append((target, sid, status))
+
     w = StateWatcher(B4(), rd)
-    raw = w.poll()
-    check("读出了 state.json", raw is not None)
-    if raw:
+    raws = w.poll()
+    check("读出了 state.json", bool(raws), f"{len(raws)} 份")
+    if raws:
+        target, raw = next(iter(raws.items()))
         n = len(raw.get("steps") or {})
-        check("含多个节点记录", n >= 3, f"{n} 个节点")
+        check("含多个节点记录", n >= 3, f"target={target} {n} 个节点")
         check("首次轮询推送了状态", len(seen) > 0, f"{len(seen)} 条")
+        check("推送都带 target",
+              all(t is not None for t, _s, _st in seen),
+              f"targets={sorted({str(t) for t, _s, _st in seen})}")
         # 第二次轮询 mtime 不变，应当不再推送（去重生效）
         seen.clear()
-        w.poll()
-        check("mtime 未变时不重复推送", len(seen) == 0, f"{len(seen)} 条")
+        raws2 = w.poll()
+        check("mtime 未变时不重复推送", raws2 == {} and len(seen) == 0,
+              f"raws2={raws2} 推送={len(seen)} 条")
 
 print("\n" + "=" * 74)
 if FAIL:

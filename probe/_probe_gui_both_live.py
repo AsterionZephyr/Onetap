@@ -53,19 +53,16 @@ def main():
         pass
 
     print(f"  1. App 已建：python_var={app.python_var.get()}")
-    print(f"     TARGET_CHOICES = {A.TARGET_CHOICES}")
-    print(f"     TARGET_ARG     = {A.TARGET_ARG}")
+    print(f"     目标清单 = {[k for k, _d in A.TARGET_PROGRAMS]}")
 
-    # ---- 2. 选目标程序：两个都跑 ----
-    both_label = None
-    for lab, arg in A.TARGET_ARG.items():
-        if arg == "both":
-            both_label = lab
-    if both_label is None:
-        print("  [NG] TARGET_ARG 里没有 both")
+    # ---- 2. 选目标程序：全选（= 任意多选里的"全都要"）----
+    app.follow_var.set(False)
+    app.on_select_all()
+    picked = app.selected_targets()
+    print(f"  2. 目标选择器 = 全选 -> {picked} -> --target {','.join(picked)}")
+    if len(picked) < 2:
+        print("  [NG] 全选之后不足 2 个目标")
         return 1
-    app.target_var.set(both_label)
-    print(f"  2. 目标选择器 = {both_label!r} -> --target {A.TARGET_ARG[both_label]}")
 
     # 只跑节点（可选，仅排障用）
     if args.only:
@@ -94,9 +91,9 @@ def main():
 
     orig_node = app.runner.bus.node
 
-    def spy_node(sid, name, status, note=None, elapsed=None):
-        nodes[sid] = status
-        return orig_node(sid, name, status, note=note, elapsed=elapsed)
+    def spy_node(target, sid, name, status, note=None, elapsed=None):
+        nodes.setdefault(target, {})[sid] = status
+        return orig_node(target, sid, name, status, note=note, elapsed=elapsed)
 
     app.runner.bus.node = spy_node
 
@@ -142,7 +139,7 @@ def main():
             last_tick = time.time()
             el = time.time() - t0
             print(f"     … +{el:.0f}s  日志 {len(logs)} 行  "
-                  f"节点状态 {sorted((k, v) for k, v in nodes.items())}")
+                  f"节点 {sorted((str(k), dict(v)) for k, v in nodes.items())}")
         time.sleep(0.05)
 
     # 再抽一会儿，让尾部日志出来
@@ -162,8 +159,8 @@ def main():
     text = "\n".join(logs)
     checks = []
 
-    checks.append(("日志里出现 --target both",
-                   "--target both" in text))
+    checks.append(("日志里出现 --target ww,nte",
+                   f"--target {','.join(picked)}" in text))
     checks.append(("出现「串联第 1 轮」",
                    "串联第 1 轮" in text))
     checks.append(("出现「串联第 2 轮」",
@@ -204,6 +201,18 @@ def main():
 
     checks.append((f"两轮各有一套 all-ok 的节点状态（实得 {ok_subs}）",
                    len(ok_subs) == 2))
+
+    # GUI 侧：S1 的核心 —— 同一个界面里同时记住两个程序的节点状态。
+    gui_seen = sorted(str(k) for k in app._tstate)
+    checks.append((f"GUI 记住了每个目标的节点状态（实得 {gui_seen}）",
+                   set(app._tstate) == set(picked)))
+    dots = {t: app._target_rows[t]["dot"]["text"] for t in picked}
+    checks.append((f"每个目标行尾的进度点都不是空心（实得 {dots}）",
+                   all(txt and "○" not in txt for txt in dots.values())))
+    gui_all_ok = {t: {s for s, _n in (app._tstate.get(t) or {}).values()}
+                  for t in picked}
+    checks.append((f"GUI 侧两份节点状态全 ok（实得 {gui_all_ok}）",
+                   all(v == {"ok"} for v in gui_all_ok.values())))
 
     badstatus = []
     for sub, raw in per_sub.items():

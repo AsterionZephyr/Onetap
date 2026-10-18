@@ -85,12 +85,32 @@ cd E:\TOOLS\ScriptsGames\Onetap
 | `--show-cmd` | 打印每节的完整命令行（便于手工复现） |
 | `--list` | 只列链条 |
 | `--step-arg ARG` | 原样透传给每一个 step 的额外参数 |
-| `--target ww\|nte\|both` | 目标程序。**省略**时跟随 `state.json` 的记录 |
+| `--target LIST` | 目标程序，逗号分隔，任意多个：`ww` / `nte` / `ww,nte` / `nte,ww`。**省略**时跟随 `state.json` 的记录 |
 | `--run-timeout SEC` | 整轮墙钟上限（默认 1800s = 半小时） |
 | `--keep-game` | 到点收尾时**不关游戏** |
 | `--no-watchdog` | 停用整轮时间上限 |
 
-**`--target both` 串联两程序**：按 ok-ww → ok-nte 顺序**各跑一遍完整链条**，
+**`--target` 的取值来自 `orchestrator/targets.py`**（不再是硬编码的
+`ww|nte|both`，加程序只要往 `orchestrator/programs.py` 的 `ALL` 里加一条）：
+
+| 写法 | 结果 |
+| --- | --- |
+| `--target ww` / `--target nte` | 单个程序，不算串联 |
+| `--target ww,nte` | 串联，**按书写顺序**跑（不是清单顺序 —— 想先跑 nte 就写 `nte,ww`） |
+| `--target all` / `--target both` | 全部，按清单声明顺序（`both` 是 2026-10 的历史写法，永久保留） |
+| 重复项 / 中文逗号 / `+` / 空格分隔 | 都接受，重复项去重并保留首次位置 |
+| 未知 key（`--target xx`） | **立刻报错退出**，连 `--list` 也报（错误信息里列出全部已知 key） |
+| `--target all,ww` | 报错：别名 `all`/`both` 不能和其他程序名混用 |
+
+⚠️ **一个节点只能跑一个程序**：节点级命令行（`context.add_common_args`）拿到
+`--target ww,nte` 会直接报错，而不是随便挑一个 —— 那个节点该操作谁是真的歧义。
+
+**加第 3 个程序**（`foo`）要做的事：`orchestrator/programs.py` 的 `ALL` 里加一条
+`Program(key="foo", display="ok-foo", ...)`；再同步 `gui/targets.py` 的 `FALLBACK`
+（那是 GUI 的**第二处声明**，不同步界面会告警「清单漂移」，但仍以磁盘值为准）。
+`main.py` / `targets.py` / GUI 的多选清单**都不用改** —— 它们全从 `ALL` 派生。
+
+**`--target ww,nte` 串联**：按给定顺序**各跑一遍完整链条**，
 不是把两个程序的节点混在一条链里。三个实现要点：
 
 1. 两轮各用**子目录**（`<run-dir>/ww`、`<run-dir>/nte`）。共用目录的话
@@ -101,13 +121,14 @@ cd E:\TOOLS\ScriptsGames\Onetap
 
 ```bash
 # 串起来跑一遍（ok-ww 先，ok-nte 后）
-python -m orchestrator.steps.main --target both
+python -m orchestrator.steps.main --target ww,nte
 
 # 只看编排不碰真机
-python -m orchestrator.steps.main --target both --dry-run --only 1
+python -m orchestrator.steps.main --target ww,nte --dry-run --only 1
 ```
 
-⚠️ **`both` 不是并发**：两程序沿用 INV-15 的独占前提，**串行**执行。
+⚠️ **串联不是并发**：两程序沿用 INV-15 的独占前提，**串行**执行
+（`all` / `both` 两个老写法等价于 `ww,nte`）。
 
 另有**透传给特定节点**的参数（主控自己不做处理，只转发）：
 `--skip-admin-check`（节点 1）、`--no-launch`（节点 2）、

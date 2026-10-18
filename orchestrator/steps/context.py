@@ -422,6 +422,20 @@ def resolve_program(state=None, args=None, log=None):
 # ------------------------------------------------------------ 命令行共用
 
 
+def _target_arg(text):
+    """`--target` 的单程序校验（argparse type）。
+
+    节点级只允许一个程序：`--target ww,nte` 在这里是**歧义**（这个节点该
+    操作谁？），必须在解析参数时就报错，而不是等到 state.json 里读出
+    一个键名再 `programs.get()` 抛 KeyError。清单来源见 orchestrator/targets.py。
+    """
+    from .. import targets
+    try:
+        return targets.validate_choices_flag(text)
+    except targets.TargetError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
 def add_common_args(ap):
     """给每个 step 脚本装上统一的参数。"""
     ap.add_argument("--run-dir", default=None,
@@ -432,9 +446,11 @@ def add_common_args(ap):
                     help="强制新建一个运行目录（否则沿用 --run-dir / 最近一次）")
     # --target 只对**手工单跑**某个 step 时有用：正常链路里程序名已写在
     # state.json（见 program_key）。默认 None 表示「跟随 state.json」。
-    ap.add_argument("--target", default=None, choices=["ww", "nte"],
-                    help="目标程序（ww=ok-ww / nte=ok-nte）。"
-                         "省略时跟随 state.json；手工单跑某节时用它指定")
+    # 取值不写死在这里 —— 清单的唯一来源是 orchestrator/targets.py。
+    ap.add_argument("--target", default=None, type=_target_arg, metavar="KEY",
+                    help="目标程序（任一 programs.ALL 里的 key，如 ww / nte）。"
+                         "省略时跟随 state.json；手工单跑某节时用它指定。"
+                         "**一个节点只能有一个程序**（要跑多个请用主控）")
     return ap
 
 

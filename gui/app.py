@@ -26,6 +26,7 @@ import tkinter.ttk as ttk
 from tkinter import messagebox
 
 from . import chain
+from . import targets as gui_targets
 from .editor import CodeEditor
 from .runner import Runner, StateWatcher, discover_run_dir_from_line
 
@@ -51,22 +52,16 @@ NODE_STYLE = {
     None:      ("\u25cb", "#9e9e9e", "#ffffff", "未运行"),
 }
 
-# 目标程序下拉项。中文在前（人读），--target 的取值在括号里（机读）。
+# 目标程序清单：**任意多选**，来源见 gui/targets.py（ast 静态读
+# orchestrator/programs.py，读不出来就回落兜底值并在界面上告警）。
 # ⚠️ 与 gui/chain.py 同样的理由：这里**独立声明**，不 import orchestrator，
 # 否则 main.py 一坏，GUI 连修它的界面都打不开。
-TARGET_CHOICES = [
-    "跟随记录（默认）",
-    "ok-ww",
-    "ok-nte",
-    "两个都跑（先 ok-ww 后 ok-nte）",
-]
-# 显示文本 -> --target 取值。None = 不传该参数。
-TARGET_ARG = {
-    "跟随记录（默认）": None,
-    "ok-ww": "ww",
-    "ok-nte": "nte",
-    "两个都跑（先 ok-ww 后 ok-nte）": "both",
-}
+TARGET_PROGRAMS, TARGET_PROBLEMS = gui_targets.load()
+
+# 选择器从「单选下拉」改成「多选列表」后，不再有 "两个都跑" 这种枚举项 ——
+# 勾几个就传几个（`--target ww,nte`），顺序 = 这里的声明顺序。
+# 「跟随上次记录」（不传 --target）仍保留为一个独立开关：
+# 少了它，`接着上次` 续跑 ok-nte 会被悄悄改回默认程序。
 
 
 class Bus:
@@ -78,8 +73,9 @@ class Bus:
     def log(self, msg, kind=None):
         self.q.put(("log", (msg, kind)))
 
-    def node(self, sid, name, status, note=None, elapsed=None):
-        self.q.put(("node", (sid, name, status, note, elapsed)))
+    def node(self, target, sid, name, status, note=None, elapsed=None):
+        """一条节点状态。`target` = 程序 key（未知时传 None）。"""
+        self.q.put(("node", (target, sid, name, status, note, elapsed)))
 
     def finished(self, code, note):
         self.q.put(("finished", (code, note)))
@@ -105,8 +101,16 @@ class App(tk.Tk):
         self.dry_run = tk.BooleanVar(value=dry_run)
         self.only_var = tk.StringVar(value=only or "")
         self.resume_var = tk.BooleanVar(value=False)
-        # 目标程序："" = 跟随 state.json；"both" = 两程序串联
-        self.target_var = tk.StringVar(value=TARGET_CHOICES[0])
+        # 目标程序：多选。默认「跟随上次记录」= 不传 --target
+        # （读 state.json 里记录的程序；`接着上次` 续跑 ok-nte 时不会被改回 ww）。
+        self.follow_var = tk.BooleanVar(value=True)
+        self.target_vars = {k: tk.BooleanVar(value=True) for k, _d in TARGET_PROGRAMS}
+        # 步骤区显示哪个目标的节点状态；None = 跟着正在跑的那个走
+        self._view_target = None
+        # 最近一次收到节点状态的目标（None = 还没收到 / 不知道）
+        self._active_target = None
+        # target -> {sid: (status, note)}；target 为 None 表示"还不知道"
+        self._tstate = {}
         self.python_var = tk.StringVar(value=sys.executable)
 
         self.node_rows = {}      # 第 1 页的步骤行
@@ -182,9 +186,17 @@ class App(tk.Tk):
         page.columnconfigure(1, weight=4)
         page.rowconfigure(0, weight=1)
 
-        # 左：步骤列表
-        left = ttk.Labelframe(page, text="步骤", padding=4)
+        # 左：目标（多选）+ 步骤列表
+        left = ttk.Labelframe(page, text="目标与步骤", padding=4)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=6)
+
+        self._build_target_selector(left)
+
+        # 步骤行的表头：说明下面这 8 行显示的是**哪个目标**的进度
+        self.lbl_scope = tk.Label(
+            left, text="步骤状态：—", bg=BG, fg="#33475b", anchor="w",
+            font=("Microsoft YaHei UI", 9, "bold"))
+        self.lbl_scope.pack(fill="x", pady=(6, 2))
 
         self.run_list = tk.Frame(left, bg="#ffffff")
         self.run_list.pack(fill="both", expand=True)
@@ -239,16 +251,152 @@ class App(tk.Tk):
 
         ttk.Checkbutton(ctl, text="dry-run", variable=self.dry_run).pack(side="left")
         ttk.Separator(ctl, orient="vertical").pack(side="left", fill="y", padx=10)
-        # 目标程序选择器。"" 表示不传 --target（跟随 state.json 的记录，
-        # 这样 `接着上次` 不会把 ok-nte 的运行悄悄改回 ok-ww）。
-        ttk.Label(ctl, text="目标").pack(side="left")
-        ttk.Combobox(ctl, textvariable=self.target_var, width=14, state="readonly",
-                     values=TARGET_CHOICES).pack(side="left", padx=(4, 0))
+        # 目标程序选择器不在这里：它在左栏（多选列表，见 _build_target_selector）。
+        # 控制条只留一个只读的摘要，省得运行时忘了自己勾了什么。
+        self.lbl_targets = ttk.Label(ctl, text="", foreground="#555")
+        self.lbl_targets.pack(side="left")
         ttk.Label(ctl, text="只跑节点").pack(side="left", padx=(12, 2))
         ttk.Combobox(ctl, textvariable=self.only_var, width=4, state="readonly",
                      values=[""] + chain.STEP_IDS).pack(side="left")
         ttk.Checkbutton(ctl, text="接着上次", variable=self.resume_var).pack(
             side="left", padx=(12, 0))
+        # lbl_targets 是在本函数里才建的，选择器构建时它还不存在 ——
+        # 这里补一次刷新，否则启动后控制条上的目标摘要一直是空白的。
+        self._on_targets_changed()
+        self._repaint_steps()
+
+    # --- 目标程序选择器（任意多选 + 全选/清空）------------------------
+
+    def _build_target_selector(self, parent):
+        """左栏顶部的目标选择器。
+
+        三件独立的东西，别混：
+
+            ☐ 跟随上次记录        完全不传 --target（读 state.json 的记录）
+            ☑ ok-ww / ☑ ok-nte    传 `--target ww,nte`（顺序 = 清单声明顺序）
+            行尾的 ✔ 8/8          该程序**正在跑的那一轮**的进度（与勾选无关）
+
+        为什么不是 Combobox：Combobox 只能单选，而需求是「任意多选 + 全选」。
+        Tk 没有现成的多选列表控件，最低成本且状态一眼可见的做法就是
+        Checkbutton 一列 + 全选/清空两个按钮。
+        """
+        box = ttk.Frame(parent)
+        box.pack(fill="x")
+
+        self.chk_follow = ttk.Checkbutton(
+            box, text="跟随上次记录（不传 --target）",
+            variable=self.follow_var, command=self._on_targets_changed)
+        self.chk_follow.pack(anchor="w")
+
+        self._target_rows = {}
+        for key, disp in TARGET_PROGRAMS:
+            row = tk.Frame(box, bg=BG)
+            row.pack(fill="x")
+            chk = ttk.Checkbutton(row, text=disp, variable=self.target_vars[key],
+                                  command=lambda k=key: self._on_target_chk(k))
+            chk.pack(side="left")
+            dot = tk.Label(row, text="\u25cb", bg=BG, fg="#9e9e9e",
+                           font=("Segoe UI", 9))
+            dot.pack(side="right")
+            self._target_rows[key] = {"row": row, "chk": chk, "dot": dot,
+                                      "disp": disp}
+            for w in (row, dot):
+                w.bind("<Button-1>",
+                       lambda e, k=key: self.on_view_target(k))
+                w.configure(cursor="hand2")
+
+        btns = tk.Frame(box, bg=BG)
+        btns.pack(fill="x", pady=(2, 0))
+        self.btn_all = ttk.Button(btns, text="全选", width=6,
+                                  command=self.on_select_all)
+        self.btn_all.pack(side="left")
+        self.btn_none = ttk.Button(btns, text="清空", width=6,
+                                   command=self.on_select_none)
+        self.btn_none.pack(side="left", padx=(4, 0))
+
+        self.lbl_pick = tk.Label(box, text="", bg=BG, fg="#555", anchor="w",
+                                 wraplength=210, justify="left",
+                                 font=("Microsoft YaHei UI", 8))
+        self.lbl_pick.pack(fill="x", pady=(2, 0))
+        self._on_targets_changed()
+
+    def _on_targets_changed(self):
+        """跟随开关一变，就刷新清单下方的说明与运行摘要。
+
+        这里**不置灰**多选列表 —— 两个原因：
+        1. ttk 在 vista 主题下把「disabled + 已勾」画成一个空白灰方框，
+           看起来跟「没勾」一模一样（实测截图如此），比不置灰更误导；
+        2. 跟随中直接勾一个程序，本来就是用户想切到手动的自然动作
+           （见 _on_target_chk，勾一下自动关掉跟随）。
+        运行期间的选择器锁定在 _set_target_controls 里做，是另一回事。
+        """
+        follow = bool(self.follow_var.get())
+        if follow:
+            text = "运行哪个程序：跟随 state.json 里记录的那个\n（勾选暂不生效，勾一下即改为手动）"
+        else:
+            picked = self.selected_targets()
+            if not picked:
+                text = "⚠ 未勾选任何程序 —— 点「全选」或勾一个"
+            else:
+                disp = dict(TARGET_PROGRAMS)
+                text = "将依次运行：" + " → ".join(disp.get(k, k) for k in picked)
+        if hasattr(self, "lbl_pick"):
+            self.lbl_pick.config(text=text)
+        if hasattr(self, "lbl_targets"):
+            self.lbl_targets.config(text=self._targets_summary())
+
+    def _targets_summary(self):
+        if self.follow_var.get():
+            return "目标：跟随记录"
+        picked = self.selected_targets()
+        return "目标：" + (",".join(picked) if picked else "（未选）")
+
+    def selected_targets(self):
+        """勾选的程序 key，顺序 = 清单声明顺序（= 执行顺序）。"""
+        if self.follow_var.get():
+            return []
+        return [k for k, _d in TARGET_PROGRAMS if self.target_vars[k].get()]
+
+    def on_select_all(self):
+        self.follow_var.set(False)
+        for v in self.target_vars.values():
+            v.set(True)
+        self._on_targets_changed()
+
+    def on_select_none(self):
+        self.follow_var.set(False)
+        for v in self.target_vars.values():
+            v.set(False)
+        self._on_targets_changed()
+
+    def _on_target_chk(self, key):
+        """直接勾/取消某个程序：跟随中勾选 = 想手动选，自动关掉跟随。
+
+        不自动关的话，用户会看到「勾了 ok-ww」但实际仍按记录跑，
+        还以为是勾选不灵 —— 静默失效，正是本仓库反复踩的坑。
+        """
+        if self.follow_var.get():
+            self.follow_var.set(False)
+        self._on_targets_changed()
+
+    def _set_target_controls(self, enabled):
+        """运行期间锁住选择器：改了也不会生效，只会让人以为生效了。"""
+        if not hasattr(self, "_target_rows"):
+            return
+        if enabled:
+            self._on_targets_changed()
+            self.chk_follow.config(state="normal")
+        else:
+            for r in self._target_rows.values():
+                r["chk"].config(state="disabled")
+            for btn in (self.btn_all, self.btn_none):
+                btn.config(state="disabled")
+            self.chk_follow.config(state="disabled")
+
+    def on_view_target(self, key):
+        """点某个目标 -> 下面的 8 行步骤切到它。None = 自动跟随当前在跑的那个。"""
+        self._view_target = None if self._view_target == key else key
+        self._repaint_steps()
 
     # --- 第 2 页 ------------------------------------------------------
 
@@ -359,18 +507,93 @@ class App(tk.Tk):
         if int(self.log_text.index("end-1c").split(".")[0]) > 6000:
             self.log_text.delete("1.0", "2000.0")
 
-    def set_current(self, sid, name, status):
+    def set_current(self, sid, name, status, target=None):
         label = {"running": "运行中", "ok": "已完成", "failed": "失败",
                  "timeout": "超时", "skipped": "跳过"}.get(status, status or "")
+        scope = ""
+        if target:
+            scope = f"{dict(TARGET_PROGRAMS).get(target, target)} · "
         self.lbl_current.config(
-            text=f"当前步骤 {sid} · {name} · {label}",
+            text=f"当前步骤 {scope}{sid} · {name} · {label}",
             fg="#1565c0" if status == "running" else
                ("#c62828" if status in ("failed", "timeout") else "#33475b"))
 
-    def set_node(self, sid, status, note=None):
-        info = self.node_rows.get(sid)
-        if info:
-            self._paint(info, status, note)
+    # state.json 里的状态名 == NODE_STYLE 的键，故只做"过滤未知值"。
+    def _vis(self, status):
+        return status if status in NODE_STYLE and status is not None else None
+
+    def set_node(self, target, sid=None, status=None, note=None, elapsed=None):
+        """记一条节点状态并重画。
+
+        新签名：`set_node(target, sid, status, note)`，`target` = 程序 key，
+        None 表示"还不知道是哪个程序"（跟随记录模式下的单目标运行）。
+        旧签名 `set_node(sid, status, note)` 仍然认 —— docs/ 下几个自检探针
+        直接调它（它们是"界面确实会变"的证据来源），不为改签名去动它们。
+        """
+        # 旧签名兼容 —— docs/ 下几个自检探针是"界面确实会变"的证据来源，
+        # 不为改签名去动它们。可能的旧写法：
+        #   set_node(sid, status)             2nd 是状态
+        #   set_node(sid, status, note)       2nd 是状态
+        #   set_node(sid, name, status, note) 2nd 是名字，3rd 才是状态
+        # 新签名的 2nd 参数必是节点号（chain.BY_ID），不会与上面三种混淆。
+        if sid not in chain.BY_ID:
+            if sid in NODE_STYLE:
+                target, sid, status, note = None, target, sid, status
+            else:
+                target, sid = None, target
+        self._tstate.setdefault(target, {})[sid] = (status, note)
+        self._active_target = target
+        self._refresh_target_dots()
+        self._repaint_steps()
+
+    def _effective_view_target(self):
+        """下面的步骤行该显示哪个目标的进度。"""
+        if self._view_target:
+            return self._view_target
+        if self._active_target is not None:
+            return self._active_target
+        known = [k for k in self._tstate if k]
+        return known[0] if len(known) == 1 else None
+
+    def _target_label(self, tgt):
+        if tgt is None:
+            return "未确定（跟随 state.json）"
+        return dict(TARGET_PROGRAMS).get(tgt, tgt)
+
+    def _repaint_steps(self):
+        tgt = self._effective_view_target()
+        st = self._tstate.get(tgt) or {}
+        for sid, info in self.node_rows.items():
+            status, note = st.get(sid, (None, None))
+            self._paint(info, self._vis(status), note)
+        if hasattr(self, "lbl_scope"):
+            self.lbl_scope.config(text=f"步骤状态：{self._target_label(tgt)}")
+
+    def _refresh_target_dots(self):
+        """每个目标行尾的进度点：完成数 / 总数 + 聚合状态。"""
+        total = len(chain.STEPS)
+        done_states = ("ok", "failed", "timeout", "skipped")
+        for key, r in getattr(self, "_target_rows", {}).items():
+            st = self._tstate.get(key) or {}
+            states = [s for s, _n in st.values()]
+            done = sum(1 for s in states if s in done_states)
+            if any(s in ("failed", "timeout") for s in states):
+                mark, fg = NODE_STYLE["failed"][0], NODE_STYLE["failed"][1]
+            elif done == total and all(s == "ok" for s in states):
+                mark, fg = NODE_STYLE["ok"][0], NODE_STYLE["ok"][1]
+            elif "running" in states:
+                mark, fg = NODE_STYLE["running"][0], NODE_STYLE["running"][1]
+            elif done:
+                # 部分完成、没在跑、也没错：只报数字，不加符号 ——
+                # 之前用 "…" 前缀，看起来像文本被截断了（实测截图如此）。
+                mark, fg = "", "#6d6d6d"
+            else:
+                mark, fg = NODE_STYLE[None][0], NODE_STYLE[None][1]
+            if mark:
+                text = f"{mark} {done}/{total}" if done else mark
+            else:
+                text = f"{done}/{total}"
+            r["dot"].config(text=text, fg=fg)
 
     # ------------------------------------------------------------- 第 2 页
 
@@ -436,7 +659,8 @@ class App(tk.Tk):
         self.btn_revert.config(state=state)
 
     def _status_of(self, sid):
-        return self._last_status.get(sid)
+        tgt = self._effective_view_target()
+        return (self._tstate.get(tgt) or {}).get(sid, (None, None))[0]
 
     # ------------------------------------------------------------- 运行
 
@@ -457,17 +681,31 @@ class App(tk.Tk):
             args += ["--only", only]
         if self.resume_var.get():
             args.append("--resume")
-        # 目标程序：只有显式选了才传 --target。
+        # 目标程序：勾几个就传几个；「跟随上次记录」则完全不传。
         # "" 必须**不传**（而不是传 "ww"）—— 否则「接着上次」续跑 ok-nte 时
         # 会被悄悄改回 ok-ww（main.py 的 --target 是覆盖语义）。
-        tgt = TARGET_ARG.get(self.target_var.get().strip())
+        if self.follow_var.get():
+            tgt = None
+        else:
+            picked = self.selected_targets()
+            if not picked:
+                messagebox.showwarning(
+                    "目标程序",
+                    "没有勾选任何目标程序。\n\n"
+                    "勾一个（或点「全选」），或者勾上「跟随上次记录」。")
+                return
+            tgt = ",".join(picked)
         if tgt:
             args += ["--target", tgt]
+        self._active_args = list(args)
 
         self.log_text.delete("1.0", "end")
-        self._last_status = {}
-        for sid in self.node_rows:
-            self._paint(self.node_rows[sid], None)
+        self._tstate = {}
+        self._active_target = None
+        self._view_target = None
+        self._refresh_target_dots()
+        self._repaint_steps()
+        self._set_target_controls(False)
         self.set_current("—", "尚未开始", None)
         self.btn_run.config(state="disabled")
         self.btn_stop.config(state="normal")
@@ -524,23 +762,24 @@ class App(tk.Tk):
     def on_finished(self, code, note):
         self.btn_run.config(state="normal")
         self.btn_stop.config(state="disabled")
+        self._set_target_controls(True)
         self.status(f"结束：{note}", "ok" if code == 0 else "err")
         self.append_log(f"\n=== 编排结束：{note}（退出码 {code}）===",
                         "ok" if code == 0 else "err")
         # 结束后再读一次 state.json，把最终状态补齐
-        raw = self.watcher.poll()
-        if raw:
-            self._apply_final(raw)
+        raws = self.watcher.poll() or {}
+        for target, raw in raws.items():
+            self._apply_final(target, raw)
 
-    def _apply_final(self, raw):
+    def _apply_final(self, target, raw):
         for sid, rec in (raw.get("steps") or {}).items():
             st = rec.get("status")
             if st and st != "running":
                 note = (rec.get("notes") or [None])[-1]
-                self.set_node(sid, st, note)
+                self.set_node(target, sid, st, note)
         last = raw.get("last_step")
         if last and last in chain.BY_ID:
-            self.set_node(last, raw.get("last_status") or "ok")
+            self.set_node(target, last, raw.get("last_status") or "ok")
 
     # ------------------------------------------------------------- 事件泵
 
@@ -553,18 +792,13 @@ class App(tk.Tk):
                     msg, tag = payload
                     self.append_log(msg, tag)
                 elif kind == "node":
-                    sid, name, status, note, elapsed = payload
+                    target, sid, name, status, note, elapsed = payload
                     # state.json 的状态名 -> 界面状态名
-                    vis = {"ok": "ok", "failed": "failed", "timeout": "timeout",
-                           "skipped": "skipped", "running": "running"}.get(
-                        status, status)
-                    self.set_node(sid, vis, note)
+                    vis = self._vis(status)
+                    self.set_node(target, sid, vis, note)
                     if status == "running":
                         shown = chain.BY_ID.get(sid, (None, name))[1]
-                        self.set_current(sid, shown, "running")
-                    elif sid == self.selected:
-                        pass
-                    self._last_status[sid] = vis
+                        self.set_current(sid, shown, "running", target=target)
                 elif kind == "finished":
                     self.on_finished(*payload)
                 elif kind == "status":
@@ -572,19 +806,18 @@ class App(tk.Tk):
         except queue.Empty:
             pass
 
-        # 轮询 state.json（运行中才需要）
+        # 轮询 state.json（运行中才需要）。节点状态由 StateWatcher 推，
+        # 这里只兜住"最后一条状态没推送出来"的情况。
         if self.runner.is_running() and self.watcher.run_dir:
-            raw = self.watcher.poll()
-            if raw:
+            raws = self.watcher.poll() or {}
+            for target, raw in raws.items():
                 last = raw.get("last_step")
                 if last and last in chain.BY_ID and raw.get("last_status"):
-                    self._last_status[last] = raw["last_status"]
+                    self.set_node(target, last, raw["last_status"])
 
         if self.nb.index(self.nb.select()) == 1:
             self._refresh_save_buttons()
         self.after(120, self._pump)
-
-    _last_status = {}
 
     # ------------------------------------------------------------- 状态栏
 
@@ -612,13 +845,20 @@ class App(tk.Tk):
         problems = chain.verify_against_disk()
         if not problems:
             self.status("就绪 — 步骤清单与 steps/ 一致", "ok")
-            return
-        self.status(f"⚠ 步骤清单有 {len(problems)} 处问题（见日志）", "warn")
-        for p in problems:
-            self.append_log(f"[警告] {p}", "warn")
-        self.append_log("", "plain")
-        self.append_log("[提示] 以上问题不影响 GUI 打开与改代码；"
-                        "但运行编排前应先修好。", "warn")
+        else:
+            self.status(f"⚠ 步骤清单有 {len(problems)} 处问题（见日志）", "warn")
+            for p in problems:
+                self.append_log(f"[警告] {p}", "warn")
+            self.append_log("", "plain")
+            self.append_log("[提示] 以上问题不影响 GUI 打开与改代码；"
+                            "但运行编排前应先修好。", "warn")
+        # 目标清单同样"警告不崩溃"：读不出 programs.py 时界面上仍有兜底项，
+        # 但必须让人知道兜底了 —— 否则会以为勾的就是真的。
+        for p in TARGET_PROBLEMS:
+            self.append_log(f"[警告] 目标程序清单：{p}", "warn")
+        if TARGET_PROBLEMS:
+            self.status(f"⚠ 目标清单有 {len(TARGET_PROBLEMS)} 处问题（见日志）",
+                        "warn")
 
     def on_close(self):
         if self.runner.is_running():

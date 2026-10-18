@@ -150,50 +150,81 @@ class Runner:
 # ===========================================================================
 
 class StateWatcher:
-    """轮询 <run-dir>/state.json，把变化推给 GUI。
+    """轮询运行目录下的 state.json，把变化推给 GUI。
+
+    **一个运行目录里可能有多份 state.json**：串联（`--target ww,nte`）时主控
+    建一个根目录，每轮程序在自己的子目录里跑 —— `<root>/ww/state.json`、
+    `<root>/nte/state.json`；单程序时就是 `<root>/state.json`（`--resume` 也是）。
+    所以这里扫的是"根目录 + 各子目录"，每份各自比 mtime、各自去重。
 
     只做"读文件 + 比较"，不解释业务。任何异常都吞掉 —— state.json 在
-    写入瞬间可能被读到半个文件（虽然 context.py 用了 os.replace 原子替换，
+    写入瞬间仍可能被读到半个文件（context.py 用 os.replace 原子替换，
     但新目录出现/消失的竞态仍可能发生）。
     """
 
     def __init__(self, bus, run_dir):
         self.bus = bus
-        self.run_dir = run_dir
-        self.path = os.path.join(run_dir, "state.json") if run_dir else None
-        self._last_mtime = None
-        self._last_steps = {}
+        self.set_run_dir(run_dir)
 
     def set_run_dir(self, run_dir):
-        self.run_dir = run_dir
-        self.path = os.path.join(run_dir, "state.json") if run_dir else None
-        self._last_mtime = None
-        self._last_steps = {}
+        self.run_dir = os.path.abspath(run_dir) if run_dir else None
+        self._mtimes = {}     # path -> mtime（按路径记，不按 target 记）
+        self._steps = {}      # path -> {sid: status}
+
+    def _scan(self):
+        """返回 [(目标提示, state.json 路径)]。目标提示可能是 None。"""
+        found = []
+        if not self.run_dir or not os.path.isdir(self.run_dir):
+            return found
+        root_state = os.path.join(self.run_dir, "state.json")
+        if os.path.isfile(root_state):
+            found.append((None, root_state))
+        try:
+            names = sorted(os.listdir(self.run_dir))
+        except OSError:
+            return found
+        for name in names:
+            sub = os.path.join(self.run_dir, name)
+            if not os.path.isdir(sub):
+                continue
+            p = os.path.join(sub, "state.json")
+            if os.path.isfile(p):
+                found.append((name, p))
+        return found
 
     def poll(self):
-        """读一次。有变化就把节点状态推给 GUI。"""
-        if not self.path or not os.path.isfile(self.path):
-            return None
-        try:
-            mtime = os.path.getmtime(self.path)
-            if mtime == self._last_mtime:
-                return None
-            self._last_mtime = mtime
-            with open(self.path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-        except (OSError, ValueError, json.JSONDecodeError):
-            return None
+        """读一轮所有 state.json。
 
-        steps = raw.get("steps") or {}
-        for sid, rec in steps.items():
-            status = rec.get("status")
-            prev = self._last_steps.get(sid)
-            if prev != status:
-                self._last_steps[sid] = status
-                self.bus.node(sid, rec.get("name", ""), status,
+        返回 `{target: raw}`（target = state.json 里的 `program`，缺失时退回
+        子目录名；单程序运行也可能是 None）。**没有变化时返回 `{}`** ——
+        调用方不要用 `if raw:` 以外的方式判断"读到了"。
+        """
+        out = {}
+        for hint, path in self._scan():
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if self._mtimes.get(path) == mtime:
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except (OSError, ValueError):
+                continue
+            self._mtimes[path] = mtime
+            target = raw.get("program") or hint
+            out[target] = raw
+            seen = self._steps.setdefault(path, {})
+            for sid, rec in (raw.get("steps") or {}).items():
+                status = rec.get("status")
+                if seen.get(sid) == status:
+                    continue
+                seen[sid] = status
+                self.bus.node(target, sid, rec.get("name", ""), status,
                               note=(rec.get("notes") or [None])[-1],
                               elapsed=rec.get("elapsed"))
-        return raw
+        return out
 
 
 def discover_run_dir_from_line(line):

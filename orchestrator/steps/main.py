@@ -35,6 +35,7 @@ import sys
 import time
 
 from .. import programs
+from .. import targets
 from .. import watchdog
 from .. import window
 from . import context
@@ -109,9 +110,14 @@ def build_parser():
     # --- 目标程序 ---------------------------------------------------------
     # ⚠️ 默认 **None**（不是 "ww"）：省略时跟随 state.json 里的记录，
     # 这样 `--resume` 续跑不会把 ok-nte 的运行悄悄改回 ok-ww。
-    p.add_argument("--target", default=None, choices=["ww", "nte", "both"],
-                   help="目标程序：ww=ok-ww（默认）/ nte=ok-nte / "
-                        "both=**先 ok-ww 再 ok-nte 串起来跑**。"
+    # 取值由 orchestrator/targets.py 解析，**不写死在这里**：
+    #   单个（ww / nte）      -> 跑一遍（老行为，运行目录就是 --run-dir）
+    #   多个（ww,nte / all）  -> 逐个各跑一遍完整链条，各占一个子目录
+    #   `both` 是历史写法，等价于 `all`。
+    p.add_argument("--target", default=None, metavar="LIST",
+                   help="目标程序：ww=ok-ww / nte=ok-nte / "
+                        "ww,nte（逗号分隔，任意多个、按书写顺序） / all。"
+                        "多个时**逐个各跑一轮完整链条**，各占一个子目录。"
                         "开跑时写入 state.json，全链共享")
 
     # --- 透传给特定节点的参数（见 PASSTHROUGH）-----------------------------
@@ -346,41 +352,55 @@ def _report_after_timeout(prog, log):
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
+    # --- 多目标（`--target ww,nte` / `all` / `both`）----------------------
+    # ⚠️ 必须在**一个**运行目录下分几轮，且每轮要接着用 state.json ——
+    # 但 state.json 的 program 只能存一个值，所以每轮靠子进程重新指定。
+    # 这里不递归调用 main()（会重新算 run_dir、重新写日志头），
+    # 而是显式做多遍：每遍算出自己的 prog 与 run_dir，串行跑。
+    #
+    # 解析放在 --list 之前：拼错一个 key 时，`--list` 也该当场报错，
+    # 而不是先打印一张链条表、等真跑起来才发现目标不存在。
+    picked = None
+    if args.target:
+        try:
+            picked = targets.parse(args.target)
+        except targets.TargetError as e:
+            raise SystemExit(f"[--target] {e}")
+
     if args.list:
         print_chain(args)
         return 0
 
     ids = selected_steps(args)
 
-    # --- `--target both`：两程序**先后各跑一轮** --------------------------
-    # ⚠️ 必须在**一个**运行目录下分两轮，且第二轮要接着用 state.json ——
-    # 但 state.json 的 program 只能存一个值，所以第二轮靠子进程重新指定。
-    # 这里不递归调用 main()（会重新算 run_dir、重新写日志头），
-    # 而是显式做两遍：每遍算出自己的 prog 与 run_dir，串行跑。
-    if args.target == "both":
-        return run_both(args)
+    if picked and len(picked) > 1:
+        return run_multi(args, ids, picked)
 
     return run_single(args, ids)
 
 
-def run_both(args):
-    """ok-ww 跑完再跑 ok-nte。任一程序失败不影响另一个继续（用户裁定可无人值守）。"""
-    order = ["ww", "nte"]
+def run_multi(args, ids, order):
+    """按 `order` 逐个程序各跑一轮完整链条。
+
+    任一程序失败不影响后面的继续（用户裁定：可无人值守）。
+    `order` 来自 targets.parse()：可以是 2 个，也可以是拿 3、4 个——
+    以后加应用**不用改这里**，只要 programs.ALL 里有它。
+    """
     root_run_dir = (os.path.abspath(args.run_dir) if args.run_dir and not args.resume
                     else context.new_run_dir())
     os.makedirs(root_run_dir, exist_ok=True)
     log = context.Log(os.path.join(root_run_dir, "chain.log"))
     log("=" * 74)
-    log("串联运行：ok-ww → ok-nte")
+    log(f"串联运行（{len(order)} 个程序）：{targets.describe(','.join(order))}")
     log(f"运行目录 {root_run_dir}")
     log("=" * 74)
-    log("每个程序各跑一遍完整链条，各自独立计时（各 30 分钟上限），"
+    log("每个程序各跑一遍完整链条，各自独立计时（各自半小时上限），"
         "互不影响：一个失败也会继续跑下一个。")
 
     overall = []
-    for key in order:
-        # 每轮一个子目录，避免两轮的节点日志互相覆盖 —— 否则事后分不清
-        # step8.log 是哪个程序的（两轮的节点号完全相同）。
+    for idx, key in enumerate(order, 1):
+        # 每轮一个子目录，避免几轮的节点日志互相覆盖 —— 否则事后分不清
+        # step8.log 是哪个程序的（各轮的节点号完全相同）。
         sub_dir = os.path.join(root_run_dir, key)
         os.makedirs(sub_dir, exist_ok=True)
         sub = argparse.Namespace(**vars(args))
@@ -389,7 +409,7 @@ def run_both(args):
         sub.resume = False           # 新目录，不能沿用 --resume 的定位
         prog = programs.get(key)
         log("\n" + "#" * 74)
-        log(f"# 串联第 {'1' if key == 'ww' else '2'} 轮：{prog.display}（{key}）")
+        log(f"# 串联第 {idx} 轮：{prog.display}（{key}）")
         log(f"# 运行目录 {sub_dir}")
         log("#" * 74)
         t0 = time.time()
@@ -409,10 +429,10 @@ def run_both(args):
     # --- 跨程序残留复检 ---------------------------------------------------
     # ⚠️ 为什么必须单独做一遍：每轮的节点 9 只看**自己那个程序**的进程。
     # 实测 ok-nte 正常跑完会关掉游戏本体 HTGame.exe，却把 launcher
-    # NTEGame.exe 留在后台（FAULT #31）。第一轮 ok-ww 更看不见它。
-    # 两个程序都跑完后统一查一次，才能说清「到底还剩什么」。
+    # NTEGame.exe 留在后台（FAULT #31）。跑 ok-ww 那轮更看不见它。
+    # 全部跑完后统一查一次，才能说清「到底还剩什么」。
     log("-" * 74)
-    log("[串联复检] 两个程序及其游戏的最终残留")
+    log(f"[串联复检] {len(order)} 个程序及其游戏的最终残留")
     residue = {}
     for key, disp, _rc, _dt in overall:
         prog = programs.get(key)
@@ -426,10 +446,10 @@ def run_both(args):
     if left:
         log(f"  [注意] 仍有 {left} 个进程存活。按 Q3 正常完成不主动杀；")
         log(f"         要清干净请跑：python -X utf8 -m orchestrator.steps.main "
-            f"--target both --pre-clean")
+            f"--target {','.join(order)} --pre-clean")
         log(f"         （或对单一程序跑 step9_cleanup --force）")
     else:
-        log("  [OK] 两个程序及其游戏均已自行退干净")
+        log(f"  [OK] {len(order)} 个程序及其游戏均已自行退干净")
     log("=" * 74)
     log.close()
     bad = [o for o in overall if o[2] != 0]
