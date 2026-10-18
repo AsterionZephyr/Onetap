@@ -92,8 +92,15 @@ def _click_to_activate(hwnd, log=None):
     """
     st = win32.window_state(hwnd)
     if st is None:
+        # 陷阱 17（实测 2026-10-19 05:21）：窗口**已经不在**时这里也是 None。
+        # 静默 return False 会让外层把「程序自己退了」误报成「置前台失败、别的程序占着前台」，
+        # 排查方向直接跑偏。必须说出来。
+        if log:
+            log("  ⚠ 取不到目标窗口状态（窗口可能已销毁/程序已退出），不做点击")
         return False
     if st["width"] < 100 or st["height"] < 40:
+        if log:
+            log(f"  ⚠ 目标窗口尺寸异常（{st['width']}x{st['height']}），不做点击")
         return False
 
     if win32.raise_window(hwnd):
