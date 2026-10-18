@@ -14,24 +14,29 @@
 **两个程序均已验证可行**（ok-ww：FRAMEWORK §5.8；ok-nte：FRAMEWORK §0.1 与编排实测）。
 **最终目标是按顺序启动这些程序完成任务。**
 
-### 0.1 两个目标程序（结构同构，INV-28）
+### 0.1 三个目标程序（ww/nte 结构同构，MaaEnd 结构不同）
 
-| | ok-ww | ok-nte |
-| --- | --- | --- |
-| 第一层 | `ok-ww.exe`（Tauri Window, `ok-ww`） | `ok-nte.exe`（Tauri Window, `ok-nte`） |
-| 第二层 | `pythonw` + `Qt6111QWindowIcon` | `pythonw` + `Qt6112QWindowIcon` |
-| 标题 | `OK-WW v3.7.3 China  - OK-WW` | `ok-nte v1.4.8 China  - ok-nte` |
-| 子窗口 | **0** | **0** |
-| 任务页（侧栏 index / y） | index **2** / ≈**230** | index **3** / ≈**329** |
-| 身份锚点 | `3_ww_menu.png`（☰） | `4_nte_menu.png`（☰） |
-| 页面锚点 | `2_ww_page.png` | `3_nte_daily.png` |
-| **执行模型** | **每行一个「开始」** | **每行一个「开始」**（v1.4.8 起，**与 ok-ww 同构**） |
-| 动作元素定位 | `action=None` → 行扫描（按钮**白**） | `action=None` → 行扫描（按钮**青**） |
-| 终态判据 | `ww_verdict`（阶段序列） | `nte_verdict`（终止标记） |
-| 目标游戏 | `Client-Win64-Shipping.exe` | `HTGame.exe` |
-| 可执行文件 | `E:\TOOLS\ScriptsGames\ok-ww\ok-ww.exe` | `E:\TOOLS\ScriptsGames\ok-nte\ok-nte.exe` |
+| | ok-ww | ok-nte | **MaaEnd（zmd）** |
+| --- | --- | --- | --- |
+| 层数 | 两层 | 两层 | **单层**（`MaaEnd.exe` 自己持窗口） |
+| 第一层 | `ok-ww.exe`（Tauri Window, `ok-ww`） | `ok-nte.exe`（Tauri Window, `ok-nte`） | —— |
+| 第二层（窗口持有者） | `pythonw` + `Qt6111QWindowIcon` | `pythonw` + `Qt6112QWindowIcon` | `MaaEnd.exe` + **`Tauri Window`（精确相等）** |
+| 标题 | `OK-WW v3.7.3 China  - OK-WW` | `ok-nte v1.4.8 China  - ok-nte` | `MaaEnd v2.34.0-beta.1` |
+| 子窗口 | **0** | **0** | **0** |
+| 界面 | 多页 + 侧栏，**需导航** | 多页 + 侧栏，**需导航** | **单页**，无导航 |
+| 任务页（侧栏 index / y） | index **2** / ≈**230** | index **3** / ≈**329** | —— |
+| 身份锚点 | `3_ww_menu.png`（☰） | `4_nte_menu.png`（☰） | **底部绿色「开始任务」按钮**（色块取证） |
+| 页面锚点 | `2_ww_page.png` | `3_nte_daily.png` | ——（单页） |
+| **执行模型** | **每行一个「开始」** | **每行一个「开始」**（v1.4.8 起） | **一个「开始任务」提交整条队列**（实测 12 个 task_id） |
+| 动作元素定位 | 行扫描（按钮**白**） | 行扫描（按钮**青**） | **色块范式**（绿 `#008B45`）+ 底部带 + 多重闸门 |
+| 终态判据 | `ww_verdict`（阶段序列） | `nte_verdict`（终止标记） | `zmd_verdict`（`mxu-tauri.log` 的 `stop_agent_impl` + **时间戳闸**） |
+| 目标游戏 | `Client-Win64-Shipping.exe` | `HTGame.exe` | `Endfield.exe`（`UnityWndClass`） |
+| 日志 | `ok-ww\data\apps\ok-ww\working\logs\` | `ok-nte\data\apps\ok-nte\working\logs\` | `zmd\debug\mxu-tauri.log`（**另两个每次启动被清空**） |
+| 正常完成 | 自行退出 | 自行退出 | **不立即退出**（实测完成后 29 分钟仍存活，见 §6.4） |
+| 可执行文件 | `E:\TOOLS\ScriptsGames\ok-ww\ok-ww.exe` | `E:\TOOLS\ScriptsGames\ok-nte\ok-nte.exe` | `E:\TOOLS\ScriptsGames\zmd\MaaEnd.exe` |
 
-**操作机制完全一致**，差异只在界面布局与判据模块。⇒ **框架代码应做成按程序配置驱动，而不是复制两份。**
+**操作机制完全一致**，差异只在进程/窗口标识、界面布局与判据模块。⇒ **框架代码按程序配置驱动，不复制三份。**
+配置入口是 `orchestrator/programs.py` 的 `ALL`（唯一来源），节点 8 只有专属交互分支（ww 定位链 / nte / zmd）。
 
 > ⚠️ **ok-nte v1.4.8 改版**：早期是「单行日常任务 + 右下角唯一一个开始按钮」，
 > 现已改为**逐任务行**（每行一个「开始」，实测 **9 个同款按钮**）。
@@ -64,7 +69,7 @@
 
 ### 2.1 会静默出错的地方（最重要）
 
-这十类失效**不抛异常、不返回错误码**，只给错误结果。**必须主动校验**。
+这些失效**不抛异常、不返回错误码**，只给错误结果。**必须主动校验**。（第 12~14 条由 MaaEnd 接入暴露。）
 
 | # | 陷阱 | 后果 | 对策 |
 | --- | --- | --- | --- |
@@ -79,8 +84,12 @@
 | 9 | 界面状态改变排版 | 坐标漂移 | **每次重新定位，不缓存** |
 | 10 | `GetLastError` 有残留值 | 误判成败 | **只看返回值** |
 | 11 | **同一按钮出现在多页** | 在错误的页面上点击 | **页面锚点 + 元素锚点**（INV-26） |
+| 12 | **帧坐标当 client 坐标用** | **点偏 8px**（MaaEnd 实测 `(1567,1131)` vs `(1559,1130)`） | 帧是整窗 rect 的 BitBlt（含边框）⇒ 一律用 `Frame.screen_xy()`（`rect.left+cx, rect.top+cy`），**不用 `ClientToScreen`** |
+| 13 | **全屏游戏期间抓帧** | 抓到的是**游戏的像素**，且能过全部不变量闸门（尺寸/非全黑/颜色数）⇒ 静默分析错画面 | 运行期**只读日志**；MaaEnd 点完开始任务后游戏全屏，抓帧仅在点击前与失败排查时做 |
+| 14 | **跨运行借日志信号** | **假成功**（把上一次的 `stop_agent_impl` 当本次完成） | 日志判据必须有**时间戳基线闸**（`ZmdLogWindow`），只按字节偏移不够 |
+| 15 | **把 `Frame` 当 `ndarray` 传给 `frame_changed()`；把它的 `(changed, why)` 元组当 bool** | 分支**永远走不到**（`if changed is True` 恒假）；真走到时再 `AttributeError`（`'Frame' object has no attribute 'astype'`） | `frame_changed` 吃 **`frame.rgb`**、返回 **tuple**。MaaEnd 的弱证据分支两个坑同时踩中，因日志判据总是先成功而从未暴露（`probe/zmd_click_selfcheck.py` 已覆盖） |
 
-### 2.2 十一条硬性规则
+### 2.2 十三条硬性规则
 
 1. **窗口尺寸会变**（ok-ww 实测 1200×800 / 1500×1000 / 1800×1200 / 1875×1250 / 1822×1000；ok-nte 实测 1393×1047 / 1520×1020）。**每次操作前重新读 rect，绝不缓存。**
 2. **`hwnd` 每次运行都不同**（ok-ww 实测 9834000 / 198446142 / 55771756 / 651954484 / 21827074）。**不得写入配置或资产。**
@@ -250,6 +259,38 @@ ok-nte 的「关于」页上页面锚点曾得 **0.9373**（假阳性），导�
 | **程序日志** | ok-nte：`E:\TOOLS\ScriptsGames\ok-nte\logs\` |
 
 ⇒ **INV-30：证据不足时报「未知/失败」，绝不默认「成功」。**
+⇒ 注：上表「两程序」指 ok-ww / ok-nte。**MaaEnd 不自行退出**，见 §6.4。
+
+### 6.4 MaaEnd：完成 ≠ 进程退出（**判据只看日志**）
+
+**MaaEnd 跑完后 `MaaEnd.exe` 不会立刻退出**（与 ww/nte 相反：那两个完成即自行退出）。
+实测 22:26:37 完成 → 22:55:59 仍在 → 22:56:14 才出现 `[telemetry] 已结束 Session`，
+**退出原因日志未记录**（没有 exit 命令行），无法判定是人工关闭还是自身退出。
+⇒ 「进程消失」在它身上既非成功标志也非失败标志 —— 唯一的明确完成信号在日志里：
+
+```
+[2026-10-18][22:26:37][INFO][mxu_lib::commands::maa_agent] stop_agent_impl called for instance: yj2gs5w
+```
+
+| 信号 | 位置 | 用途 |
+| --- | --- | --- |
+| `stop_agent_impl called for instance: <id>` | `zmd\debug\mxu-tauri.log` | **主判据**（唯一明确终止信号） |
+| `[start_tasks] All tasks submitted, total: N task_ids` | 同上 | 点击生效的确认（节点 8d） |
+| `[MXU_KILLPROC] Killing process: <game>` | 同上 | 辅助完成证据（「关游戏」内置任务，实测排最后一条），**须注明** |
+| `run_pretask finished with exit code: 1` | 同上 | **启动失败**（多半是启动器路径没配好） |
+
+**两个必须知道的坑**：
+
+1. **`mxu-tauri.log` 跨启动追加，另两个日志每次启动被清空** ⇒ 判据只认它，且必须带
+   **时间戳基线闸**（`ZmdLogWindow.mark()` 记最后一行时间戳，`poll()` 丢弃更早的行）。
+   只按字节偏移会在「日志被清后整段重读」时借到**上一次运行**的 `stop_agent_impl` ⇒ 假成功。
+2. **两条判据只差 1 秒**（实测 22:26:36 关游戏 → 22:26:37 stop_agent）。代码在关游戏后**继续在收尾宽限里
+   poll**：拿到主判据就用主判据，拿不到才退回辅助证据并**如实写明**「宽限期内未看到 stop_agent 标记」——
+   否则 `state.json` 会让事后读日志的人以为该信号从未出现。
+
+**运行期不抓帧**：点完「开始任务」后 MaaEnd 拉起启动器与**全屏**游戏，MaaEnd 被盖住 ⇒ 抓帧拿到的是
+**游戏的像素**，而且尺寸=rect、非全黑、颜色数够，**所有不变量都会通过** ⇒ 典型的静默分析错画面。
+⇒ 等待阶段只读日志。
 
 ---
 
@@ -272,7 +313,11 @@ ok-nte 的「关于」页上页面锚点曾得 **0.9373**（假阳性），导�
 orchestrator/
 ├── window.py      窗口发现（标题正则）、rect、置前台+验证、遮挡判定、hwnd→pid
 ├── capture.py     抓帧（BitBlt）、帧尺寸校验、内容校验（身份校验见 match）
-├── match.py       模板匹配、**唯一性检查**、`verify_identity`、`scan_row_button`
+├── match.py       模板匹配、**唯一性检查**、☰ 检测、侧栏项检测（程序专属段已进 apps/）
+├── verdict.py     通用 `LogWindow`（按字节偏移 + 时间戳闸取日志窗口）与 `verdict_for` 分派
+├── frameops.py    节点 8 的**程序无关**助手：`grab`/`shot`/`frame_changed`/`finish`/`CLICK_*` 阈值
+├── statuses.py    叶子常量（任务终态 / 节点结果 / ok-script 共用终止标记），无 import
+├── apps/          **每程序专项模块**：`ww.py` / `nte.py` / `zmd.py`（定位 + 身份证据 + 判据 + 节点 8），见 docs/adr/0003
 ├── input.py       SetCursorPos + SendInput 点击
 ├── assets.py      图像资产登记（读 assets.json：图像 + 比例位置 + 出生尺寸 + 用途）
 ├── programs.py    目标程序清单（`Program` 数据类；`ALL` 是**唯一来源**）
@@ -282,15 +327,17 @@ orchestrator/
 └── assets.json    当前加载的资产清单
 ```
 
-⇒ **`window` / `capture` / `match` / `input` 四个模块的设计目标就是两程序共用**，
-ok-nte 接入时应加配置层而非复制代码。
+⇒ **`window` / `capture` / `match` / `input` 四个模块的设计目标就是三程序共用**，
+新增程序时加配置层 + 一个 `apps/<key>.py`，而非复制代码。
+反向的纪律同样重要：**专属逻辑不许写回共用文件**（ADRs 0003）—— 写回去就等于恢复
+「改 A 波及 B」，且波及是静默的。
 
 ### 8.1 多目标配置形态（**已落地为 `orchestrator/programs.py`**）
 
 > ✅ **状态更新（2026-10-16）**：本节描述的形态**已经实现**，落点是
 > [`orchestrator/programs.py`](./orchestrator/programs.py)（`Program` 数据类 +
-> `programs.get("ww"|"nte")`）。九节点链已**参数化**，两程序共用同一套节点代码，
-> 通过 `--target ww|nte|both` 选择（`both` 见 §9）。
+> `programs.get("ww"|"nte"|"zmd")`）。九节点链已**参数化**，三程序共用同一套节点代码，
+> 通过 `--target ww|nte|zmd|all` 选择（`both` 是历史别名，见 §9）。
 >
 > ⚠️ 与旧原型的两处**实测修正**：
 > - **`hwnd` 绝不进配置**（硬性规则 2）—— 每轮重新按标题正则发现。
@@ -335,7 +382,7 @@ TARGETS = {
 ORDER = ["ok-ww", "ok-nte"]                 # 编排顺序（用户指定：ok-ww 先）
 ```
 
-**差异全部落在配置里**，`window` / `capture` / `match` / `input` 四个模块**两程序共用**。
+**差异全部落在配置里**，`window` / `capture` / `match` / `input` 四个模块**三程序共用**。
 
 ⚠️ **身份锚点两程序不同，且 ok-ww 侧有分歧**：
 `orchestrator/assets.json` 当前用 `1_ww.png`（侧栏图标，位置恒为 (16,215)），

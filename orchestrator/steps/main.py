@@ -52,7 +52,8 @@ RUN_TIMEOUT = 1800.0
 CHAIN = [
     ("1", "step1_check_admin", "提权检查", "非管理员直接中止（INV-7）"),
     ("2", "step2_launch", "启动目标程序", "拉起第一层，它自行启动第二层"),
-    ("4", "step4_wait_second_layer", "等待第二层窗口", "Qt 窗口持有者出现"),
+    ("4", "step4_wait_second_layer", "等待窗口出现",
+     "窗口持有者出现（ww/nte=第二层 Qt；zmd=单层 Tauri）"),
     ("5", "step5_wait_ready", "等待窗口就绪", "标题完整 + 尺寸达标 + 采样稳定"),
     ("6", "step6_first_frame", "抓首帧并校验", "INV-1/13/17/22 + 身份校验"),
     ("7", "step7_foreground", "置前台", "INV-8/22/23 的前置关"),

@@ -26,10 +26,9 @@ from . import assets as assets_mod
 from . import capture, cleanup, match, state, win32, window
 from .errors import DiscoveryFailure, GuardFailure
 
-# 状态机取值
-COMPLETED = "completed"
-TIMEOUT = "timeout"
-FAILED = "failed"
+# 状态机取值（字符串只在 orchestrator/statuses.py 写一次：apps/*.py 的节点 8
+# 实现也要用 COMPLETED/TIMEOUT，而它们不允许 import 本文件 —— 见 statuses.py）
+from .statuses import COMPLETED, FAILED, TIMEOUT  # noqa: E402
 
 # 「证据不足」：ok-ww 进程消失，但我们从未抓到过完成帧。
 # 成因有两种，**画面无法区分**（INV-30）：
@@ -46,7 +45,7 @@ UNKNOWN = "unknown"
 # 此时进程还在、终止标记永远不来，若只按「超时」处理会白烧半小时
 # 且归因错误（报「超时」而非「卡住」）。单独取值以便节点 9 与汇总
 # 能说清到底是「等太久」还是「它不动了」。
-STALLED = "stalled"
+from .statuses import STALLED  # noqa: E402  (说明见上)
 
 # 退出码
 EXIT_OK = 0
@@ -62,7 +61,9 @@ TOTAL_TIMEOUT = 1800.0        # 整条链的兜底上限（30 分钟）
 CLICK_RETRIES = 3             # 点击无变化后的重试整轮次数（Q8：N=3）
 CLICK_RETRY_INTERVAL = 2.0    # 重试间隔（Q8）
 NAV_RETRIES = 3               # 导航闭环的尝试次数
-CHANGE_THRESHOLD = 0.5        # 画面「有变化」的平均绝对差阈值
+# 画面「有变化」的平均绝对差阈值：定义在 frameops（它不许 import 本文件，
+# 否则 apps/zmd.py -> frameops -> orchestrator -> match -> apps/zmd 成环）。
+from .frameops import CHANGE_THRESHOLD  # noqa: E402
 
 
 class Log:

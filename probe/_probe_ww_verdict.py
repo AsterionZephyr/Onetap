@@ -135,10 +135,18 @@ except (KeyError, ValueError):
     check("✓ 未知程序必须抛错（不回落默认）", True)
 
 probs = v.logdir_self_check()
-check("✓ 两个程序的日志目录都真实存在且非空", not probs, f"问题: {probs}")
+# MaaEnd（key="zmd"）的日志不在 data/apps/ok-<key>/working/logs，而在
+# <root>/debug；它的可用性由 zmd_log_self_check 单独把关（判据同样只认日志）。
+probs += v.zmd_log_self_check()
+check("✓ ww/nte/zmd 三个程序的日志目录都真实存在且文件认得出来",
+      not probs, f"问题: {probs}")
 
 # 关键：目录名必须带 ok- 前缀（初版写错成 <key>，静默读空）
+# 例外：programs 里显式给了 logdir 覆盖的程序（如 zmd=...\zmd\debug）不按
+# 这个约定走，硬套只会得到一条假问题，掩盖真正的问题。
 for p in programs.ALL:
+    if getattr(p, "logdir", None):
+        continue
     d = str(v._logdir_for(p)).lower()
     check(f"✓ {p.key} 日志目录名带 ok- 前缀", f"apps\\ok-{p.key}\\" in d, d)
 

@@ -28,8 +28,8 @@
 | 节点 | 名称 | 文件 | 对应 README §5 |
 | --- | --- | --- | --- |
 | 1 | 提权检查 | [step1_check_admin.py](./orchestrator/steps/step1_check_admin.py) | 前置 |
-| 2 | 启动 ok-ww.exe | [step2_launch.py](./orchestrator/steps/step2_launch.py) | `[1]` 前半 |
-| 4 | 等待第二层窗口 | [step4_wait_second_layer.py](./orchestrator/steps/step4_wait_second_layer.py) | `[1]` 后半 |
+| 2 | 启动目标程序 | [step2_launch.py](./orchestrator/steps/step2_launch.py) | `[1]` 前半 |
+| 4 | 等待窗口持有者 | [step4_wait_second_layer.py](./orchestrator/steps/step4_wait_second_layer.py) | `[1]` 后半 |
 | 5 | 等待窗口就绪 | [step5_wait_ready.py](./orchestrator/steps/step5_wait_ready.py) | `[2a]` 前置 |
 | 6 | 抓首帧 + 校验 + 身份 | [step6_first_frame.py](./orchestrator/steps/step6_first_frame.py) | `[2a]` 抓帧 |
 | 7 | 置前台 + 可用性校验 | [step7_foreground.py](./orchestrator/steps/step7_foreground.py) | `[2]` |
@@ -85,7 +85,7 @@ cd E:\TOOLS\ScriptsGames\Onetap
 | `--show-cmd` | 打印每节的完整命令行（便于手工复现） |
 | `--list` | 只列链条 |
 | `--step-arg ARG` | 原样透传给每一个 step 的额外参数 |
-| `--target LIST` | 目标程序，逗号分隔，任意多个：`ww` / `nte` / `ww,nte` / `nte,ww`。**省略**时跟随 `state.json` 的记录 |
+| `--target LIST` | 目标程序，逗号分隔，任意多个：`ww` / `nte` / `zmd`（MaaEnd）/ `ww,nte` / `nte,ww` …。**省略**时跟随 `state.json` 的记录 |
 | `--run-timeout SEC` | 整轮墙钟上限（默认 1800s = 半小时） |
 | `--keep-game` | 到点收尾时**不关游戏** |
 | `--no-watchdog` | 停用整轮时间上限 |

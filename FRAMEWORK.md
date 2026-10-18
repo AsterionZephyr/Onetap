@@ -38,48 +38,49 @@
 
 ## 0.1 目标程序一览
 
-> 本节是**全框架唯一的「因程序而异」清单**。此表之外的一切机制，两程序共用。
+> 本节是**全框架唯一的「因程序而异」清单**。此表之外的一切机制，三程序共用。
 
 ### 0.1.1 实现状态（**先读这一条**）
 
-| 程序 | 框架设计 | **当前实现** |
-| --- | --- | --- |
-| **ok-ww** | ✅ 完整覆盖 | ✅ [`orchestrator/steps/`](./orchestrator/steps/) 九节点链 + [`orchestrator/assets.json`](./orchestrator/assets.json) |
-| **ok-nte** | ✅ 已验证可行（不变量适用） | ⚠️ **尚未并入当前链条** |
+| 程序 | 框架设计 | **当前实现** | 端到端实跑 |
+| --- | --- | --- | --- |
+| **ok-ww** | ✅ 完整覆盖 | ✅ [`orchestrator/steps/`](./orchestrator/steps/) 九节点链 + [`orchestrator/assets.json`](./orchestrator/assets.json) | ✅ 多次 |
+| **ok-nte** | ✅ 完整覆盖 | ✅ 同一九节点链（`programs.NTE` + 节点 8 的 nte 分支 + `nte_verdict`） | ✅ 多次 |
+| **MaaEnd（zmd）** | ✅ 完整覆盖 | ✅ 同一九节点链（`programs.ZMD` + 节点 8 的 zmd 分支 + `zmd_verdict`） | ✅ 2026-10-18 一次（§5.9） |
 
-**⚠️ 当前 `orchestrator/` 只实现 ok-ww。** ok-nte 的**可行性已被实测确认**（§3.8、§4.3），
-但其编排代码仍是**独立的探测脚本**（`probe/nte_main.py` / `probe/nte_verdict.py`），
-**未接入 `steps/` 九节点链**。配置驱动的多目标形态原型在
-[`legacy/code-old-orchestrator/targets.py`](./legacy/code-old-orchestrator/targets.py)（**已归档，非生产**）。
+**三程序均已接入 `steps/` 同一条九节点链**，目标由 `--target` 选择（`orchestrator/programs.py:ALL`
+是唯一来源，`gui/targets.py` 的 FALLBACK 只是界面兜底）。
 
-⇒ **本表其余各行是「框架设计 / 实测事实」，不等于「当前代码已实现」。**
-把 ok-nte 接入 `steps/` 时，应以本表为准。
+⇒ 加第 N 个程序的做法：在 `programs.py` 加一条 `Program`，节点 8 若有专属交互再加一个分支；
+**其余机制全共用**。本表其余各行是「实测事实」，覆盖范围以「当前实现」列为准。
 
 ### 0.1.2 差异一览（设计口径）
 
-| 项 | ok-ww | ok-nte |
-| --- | --- | --- |
-| 第一层 | `ok-ww.exe`（Tauri Window） | `ok-nte.exe`（Tauri Window） |
-| 第二层（窗口持有者） | `pythonw` | `pythonw` |
-| 窗口类 | `Qt6111QWindowIcon` | `Qt6112QWindowIcon` |
-| 标题 | `OK-WW v3.7.4 China  - OK-WW` | `ok-nte v1.4.14 China  - ok-nte` |
+| 项 | ok-ww | ok-nte | **MaaEnd（zmd）** |
+| --- | --- | --- | --- |
+| **层数** | **两层** | **两层** | **单层**（`MaaEnd.exe` 自己持窗口，无 pythonw） |
+| 第一层 | `ok-ww.exe`（Tauri Window） | `ok-nte.exe`（Tauri Window） | ——（无第一层/第二层之分） |
+| 第二层（窗口持有者） | `pythonw` | `pythonw` | `MaaEnd.exe`（同进程，见「层数」） |
+| 窗口类 | `Qt6111QWindowIcon` | `Qt6112QWindowIcon` | `Tauri Window`（**精确相等**；ww/nte 用的是 `Qt*` **前缀**） |
+| 标题 | `OK-WW v3.7.4 China  - OK-WW` | `ok-nte v1.4.14 China  - ok-nte` | `MaaEnd v2.34.0-beta.1` |
 
 > ⚠️ **版本号已漂移（2026-10-16 实测）**：本表其余各处的 `v3.7.3` / `v1.4.8`
 > 是**当年采集资产时的版本**，属历史记录，**不要据以推断现网版本**。
 > 现网实测：**ok-ww v3.7.4**（自动更新，About 页记「更新成功 v3.7.3 -> v3.7.4」）、
 > **ok-nte v1.4.14**（10-12 起日志格式变更即 v1.4.8→之后的又一次升级，见 FAULT #18）。
 > 按 INV-35，**资产与文本判据都须按程序版本重新校验**，不能沿用旧版本的观测。
-| 子窗口数 | **0** | **0** |
-| 任务页侧栏位置 | 内容簇序号 index **2**（y≈230） | 内容簇序号 index **3**（y≈329） |
-| 身份锚点 | `1_ww.png`（侧栏图标）／☰ 回退 | `4_nte_menu.png`（☰） |
-| 页面锚点 | `2_ww.png[:, 9:72]`（日历 + 「每日任务」） | `3_nte_daily.png`（首行任务名） |
-| 动作元素 | **行结构扫描** | **行结构扫描** |
-| 按钮高亮色 | **白**（亮度 > 200） | **青**（B/G > 150 且 R < 130） |
-| 终态判据 | `ww_verdict`（日志**阶段序列**） | `nte_verdict`（**终止标记**） |
-| 目标游戏进程 | `Client-Win64-Shipping.exe` | **`HTGame.exe`（本体）+ `NTEGame.exe`（launcher）** |
-| 日志目录 | `ok-ww\data\apps\ok-ww\working\logs\` | `ok-nte\data\apps\ok-nte\working\logs\` |
-| 正常完成 | 自行退出 | 自行退出 |
-| 执行模型 | 每行一个「开始」 | **每行一个「开始」**（v1.4.8 起） |
+| 子窗口数 | **0** | **0** | **0**（Tauri/WebView2，无可用控件句柄） |
+| 界面结构 | 多页 + 左侧栏，**需导航** | 多页 + 左侧栏，**需导航** | **单页**，无侧栏、无导航（节点 8 不做 8a） |
+| 任务页侧栏位置 | 内容簇序号 index **2**（y≈230） | 内容簇序号 index **3**（y≈329） | ——（不适用） |
+| 身份锚点 | `1_ww.png`（侧栏图标）／☰ 回退 | `4_nte_menu.png`（☰） | **底部绿色「开始任务」按钮**（色块取证；被全屏游戏盖住即缺场⇒被节点 6 拦住） |
+| 页面锚点 | `2_ww.png[:, 9:72]`（日历 + 「每日任务」） | `3_nte_daily.png`（首行任务名） | ——（单页，身份锚点即页面锚点） |
+| 动作元素 | **行结构扫描** | **行结构扫描** | **色块范式**（绿掩码 + 底部带 + 尺寸/长宽比/白占比闸门） |
+| 按钮高亮色 | **白**（亮度 > 200） | **青**（B/G > 150 且 R < 130） | **绿** `#008B45` = RGB(0, 139, 69)，块内白像素 = 文字「开始任务」+ 三角 |
+| 终态判据 | `ww_verdict`（日志**阶段序列**） | `nte_verdict`（**终止标记**） | `zmd_verdict`（`mxu-tauri.log` 的 `stop_agent_impl` + **时间戳第二道闸**，§3.8） |
+| 目标游戏进程 | `Client-Win64-Shipping.exe` | **`HTGame.exe`（本体）+ `NTEGame.exe`（launcher）** | **`Endfield.exe`**（`class=UnityWndClass`，标题含 `Endfield`） |
+| 日志目录 | `ok-ww\data\apps\ok-ww\working\logs\` | `ok-nte\data\apps\ok-nte\working\logs\` | `zmd\debug\`（**只认 `mxu-tauri.log`**；同目录另两个每次启动被清空重建） |
+| 正常完成 | 自行退出 | 自行退出 | **不立即退出**（实测 22:26:37 完成 → 22:56:14 才结束 session；「跑完」只体现为日志里的 stop_agent 与界面状态） |
+| 执行模型 | 每行一个「开始」 | **每行一个「开始」**（v1.4.8 起） | **一个「开始任务」按钮提交整条队列**（实测 12 个 task_id 一次性 post_task） |
 
 > ⚠️ **游戏进程名的两个口径**：ok-nte 的日志里写 `HTGame.exe`（`nte_verdict.py` 的终止判据用它），
 > 但**清理代码用的是镜像名 `NTEGame`**（`cleanup.py`）。二者指同一个游戏，**清理时必须按 `NTEGame` 匹配**，
@@ -92,9 +93,16 @@
 > 是**游戏本体**。⇒ **要清干净游戏，两个都得杀**（`programs.NTE.game_names = ['HTGame.exe', 'NTEGame.exe']`）。
 > ok-nte 正常完成时**只关游戏本体**，launcher 会残留（FAULT #31/#32），且它带 7~8 个窗口含托盘图标。
 
-**共性**（INV-28）：Tauri 第一层 → `pythonw`/Qt 第二层 → **零子窗口** → 标题需正则 → 尺寸/位置会变。
-**差异**分布在三处：**进程与窗口标识**（exe／窗口类／标题）、**界面布局**（侧栏序号／锚点／按钮色）、
+**共性**（INV-28）：**零子窗口** → 窗口需按标题/窗口类识别 → 尺寸/位置会变 → 抓帧必须做 INV-1 校验
+→ 真实光标点击前必须过 INV-8/INV-23。
+**差异**分布在三处：**进程与窗口标识**（exe／窗口类／标题／层数）、**界面布局**（侧栏序号／锚点／按钮色）、
 **判据模块**（终态判据／游戏进程名／日志目录）。**操作机制完全一致**。
+
+> ⚠️ **MaaEnd 打破了两条「两程序同构」的直觉**（2026-10-18 实测）：
+> ①**单层** —— 没有 `pythonw` 第二层，窗口由 `MaaEnd.exe` 自己持有，故节点 4/5 的「排除第一层」
+> 那套双重闸对它不适用，靠 `window_class == "Tauri Window"` **精确相等** + 进程归属来识别；
+> ②**有伴生进程** —— `agent/go-service.exe`、`agent/cpp-algo.exe` 是它拉起的子进程（同属 `zmd` 目录），
+> 而 `msedgewebview2.exe`（在 `Program Files`）**不可**纳入归属，否则会误杀系统里的 WebView2。
 
 **「执行模型」一行的重要性**：ok-nte **v1.4.8 起与 ok-ww 同构** —— 由早期的「单行日常任务 + 右下角唯一
 一个开始按钮」改为**逐任务行**（每行一个「开始」，实测 **9 个同款按钮**）。
@@ -207,15 +215,21 @@ failed=['异象界域']  skipped=['异象追猎']
 
 **定义**：程序链条 = 多个程序按顺序启动并执行任务。它描述**条件与顺序**，不描述底层实现。识别与点击的细节归板块二。
 
-### 2.1 关键结构：两程序都是两层
+### 2.1 关键结构：ww/nte 是两层，MaaEnd 是单层
 
 ```
 第一层  ok-ww.exe  / ok-nte.exe   → 检查更新 / 启动准备   ← 自动放行，约 21 秒
 第二层  pythonw.exe               → 真正工作的程序（窗口持有者）
 ```
 
-**两程序结构同构**（INV-28）：`ok-nte.exe`（Tauri）实测同样**自行退出**，第二层同样是 `pythonw`。
+**ww/nte 结构同构**（INV-28）：`ok-nte.exe`（Tauri）实测同样**自行退出**，第二层同样是 `pythonw`。
 窗口类与标题不同，见 §0.1。
+
+> ⚠️ **MaaEnd 是单层**（2026-10-18 实测）：`MaaEnd.exe` 拉起后**不退出**，窗口由它自己持有
+> （`class='Tauri Window'`，标题 `MaaEnd v2.34.0-beta.1`），**没有** `pythonw` 第二层。
+> ⇒ 节点 2 的「启动第一层」与节点 4 的「等待窗口持有者出现」对它是**同一件事**；
+> `programs.ZMD.has_second_layer=False` 让节点 4 只等窗口出现、不再等「第二层」。
+> 其子进程 `agent/go-service.exe`、`agent/cpp-algo.exe` 只在执行任务时起，属进程血缘追踪范围。
 
 **关于 hwnd**：事实记录 §1 记的 `hwnd=9834000` 只是一个**历史观测值**。本次实测同一 ok-ww 先后出现 `198446142`、`55771756`、`651954484`、`21827074`（见 INV-14）。**hwnd 必须每次运行重新发现，不得写入任何资产或配置。**
 
@@ -458,18 +472,36 @@ pywintypes.error: (5, 'GetCursorPos', '拒绝访问。')
 
 **状态判定方式因程序而异，编排层不应理解这些细节**，应调用各 target 的状态判定函数。
 
-| 项 | ok-ww | ok-nte |
-| --- | --- | --- |
-| 状态判定依据 | 读**进度面板**文字（横幅 `运行中`/`已完成`、`current task`、错误栏） | **页面锚点 + 动作元素**（行扫描是否仍找到「开始」） |
-| 阶段标记 | `info_set current task <phase>`（**丰富**） | **无实质阶段**（只有 `wait main`/`in main`/`None`） |
-| **终止标记** | `MainThread ok:quit app`（始终最后一行） | **`TaskExecutor:Successfully Executed Task, Exiting Game and App!`** |
-| 逐任务结果 | **无** | ✅ **`DailyRoutineTask:success/failed/skipped: [...]`** |
-| 目标游戏 | `Client-Win64-Shipping.exe` | `HTGame.exe` |
-| 判据模块 | `ww_verdict` | `nte_verdict` |
+| 项 | ok-ww | ok-nte | **MaaEnd（zmd）** |
+| --- | --- | --- | --- |
+| 状态判定依据 | 读**进度面板**文字（横幅 `运行中`/`已完成`、`current task`、错误栏） | **页面锚点 + 动作元素**（行扫描是否仍找到「开始」） | **只读 `mxu-tauri.log`**（运行期**不抓帧**，见下） |
+| 阶段标记 | `info_set current task <phase>`（**丰富**） | **无实质阶段**（只有 `wait main`/`in main`/`None`） | **无业务阶段行**；只有 `[start_tasks] …` 提交段、`maa_get_all_states` 轮询、`IconRecognition` 读图 |
+| **终止标记** | `MainThread ok:quit app`（始终最后一行） | **`TaskExecutor:Successfully Executed Task, Exiting Game and App!`** | **`stop_agent_impl called for instance: <id>`**（唯一明确信号） |
+| 逐任务结果 | **无** | ✅ **`DailyRoutineTask:success/failed/skipped: [...]`** | **无**（只有每条 task 的 `post_task returned task_id`） |
+| 目标游戏 | `Client-Win64-Shipping.exe` | `HTGame.exe` | `Endfield.exe` |
+| 判据模块 | `ww_verdict` | `nte_verdict` | `zmd_verdict` + `ZmdLogWindow` |
 
 ⇒ **判据不同，必须分开实现**（不能复用 `ww_verdict` 的阶段序列法）。
-⇒ 由**配置的 `verdict_module` 字段**选择（原型见 `legacy/code-old-orchestrator/targets.py`）—— 这是配置驱动的又一处体现。
-⇒ ⚠️ **当前 `orchestrator/steps/` 只实现 ok-ww**（用 `ww_verdict`），ok-nte 的 `nte_verdict` 尚未接入。
+⇒ 分派集中在 `verdict.verdict_for(program=…)`：**未知程序显式抛错，不回落默认**
+（避免「以为在判定 A 实际判定了 B」）。三个程序均已接入 `steps/` 链。
+
+**MaaEnd 的判据细节（2026-10-18 实测，`probe/zmd_verdict_selfcheck.py` 与 `probe/zmd_wait_selfcheck.py` 覆盖）**：
+
+1. **只认 `zmd\debug\mxu-tauri.log`**。同目录的 `<date>-<n>.log`（应用日志）与 `maafw.log`（框架日志）
+   **每次启动都被清空重建**（应用日志自己写着 `Auto-cleared log files and debug artifacts on launch`），
+   不能作为跨运行判据。
+2. **两道闸**：字节偏移（`mark()` 记基线）**+ 时间戳基线**（`mark()` 记文件最后一行的时间戳，`poll()`
+   逐行丢弃 `< 基线` 的行）。**只按字节偏移是不够的** —— 日志变小/被清后整段重读，会把**上一次运行**的
+   `stop_agent_impl` 当成本次完成 ⇒ 假成功（INV-30 级别）。自检里做了反证：去掉时间戳闸，同一段文本确实判 SUCCESS。
+3. **读不到 ≠ 成功**：文本为空时一律 `unknown`（刻意区别于 ok-nte 的 `running`——`mxu-tauri.log` 跨启动追加，
+   「无新增」更像路径/权限/mark 时机坏了）。
+4. **运行期不抓帧**：MaaEnd 点完「开始任务」会拉起启动器与**全屏**游戏，MaaEnd 被盖住 ⇒ 抓到的帧是**游戏的像素**，
+   且能通过全部不变量闸门（尺寸=rect、非全黑、颜色数够）⇒ 这是**静默分析错画面**的典型场景。
+   ⇒ 等待阶段只读日志；抓帧只在点击**之前**（定位）与**失败排查**时做。
+5. **辅助证据** `[MXU_KILLPROC] Killing process: <game>`：它是 MaaEnd 自带的「关游戏」内置任务，
+   实测排在提交队列的**最后一条**，故可用作完成证据，但**必须注明**；且随后 1 秒内通常会出现
+   `stop_agent_impl`（实测 22:26:36 taskkill succeeded → 22:26:37 stop_agent_impl），
+   所以代码在关游戏后**继续在收尾宽限里 poll**，拿到主判据就用主判据，拿不到才退回辅助证据。
 
 **ok-ww 的阶段序列判据**（实测全集，`ww_verdict`）：
 
@@ -1164,6 +1196,74 @@ GetForegroundWindow()      = 651954484   ← 正是 ok-ww
 **对先前的更正**：§5.8「两次自纠」中我曾**撤回**「端到端执行成功」的结论。本次实测表明 —— **第一次端到端执行实际上确实生效了**，我当时看到的运行中任务**确为我所启动**。当时撤回的理由（锚点存在歧义、无法排除点击落空）**在逻辑上仍然成立**，但**事实结论上我判断错了**。锚点歧义是**真实的缺陷**（已由 INV-24 修复），但它在那一次**并未导致落空**。
 
 **另一条重要事实**：任务**卡在等待条件时不会超时退出**（实测十三），而**正常完成时会自行退出**。两种终止行为完全不同，框架必须能区分。
+
+### 5.9 实测：MaaEnd 端到端（2026-10-18，第三目标程序接入收官）
+
+**结论：三程序同一条九节点链，MaaEnd 一次跑通，主控退出码 0，全 8 节 OK/SKIP。**
+
+命令与产物：
+
+```
+D:\WORKs\Anaconda\python.exe -m orchestrator.steps.main --target zmd --no-launch
+run-dir = logs/runs/run-20261018-221202   （22:12:02 → 22:26:37，863s）
+```
+
+| 节点 | 结果 | 证据 |
+| --- | --- | --- |
+| 1 check_admin | OK | 已提权 |
+| 2 launch | SKIP | `--no-launch`（MaaEnd 已在跑） |
+| 4 wait_second_layer | OK 1.0s | `hwnd=202134 pid=19952 class='Tauri Window' title='MaaEnd v2.34.0-beta.1'`（单层：直接等到窗口） |
+| 5 wait_ready | OK 2.1s | `1201x826`，连续 3 次签名稳定 |
+| 6 first_frame | OK 9.7s | 帧 1201x826，身份 `1.0000`（底部绿色开始任务在场） |
+| 7 foreground | OK 0.8s | 已置前台且校验通过 |
+| 8 run_task | OK 863.1s | 定位 → 点击 → 日志确认 → 只读日志等待完成 |
+| 9 cleanup | OK 0.6s | 正常完成，**不杀任何进程**（Q3 决策） |
+
+**节点 8 的关键数据（`state.json`）**：定位 `box=(744,772,856,812)`、中心 `(800,792)`、帧原点 `(759,338)`
+⇒ 屏幕坐标 `(1559,1130)`，**第 1 次点击即成功**；`data.result='completed'`。
+
+**时间线（`mxu-tauri.log` 原文）**：
+
+```
+22:12:49  [start_tasks] All tasks submitted, total: 12 task_ids      ← [8d] 45s 内确认点击生效
+22:12:50 ~ 22:26:36  maa_get_all_states / IconRecognition …（游戏全屏，框架不抓帧）
+22:26:36  [MXU_KILLPROC] Received param: {"kill_self":false,"process_name":"Endfield.exe"}
+22:26:36  [MXU_KILLPROC] Killing process: Endfield.exe
+22:26:37  [MXU_KILLPROC] taskkill succeeded（PID 28380）
+22:26:37  stop_agent_impl called for instance: yj2gs5w                       ← 主判据
+22:26:37  [stop_agent] Stopping 2 agent client(s) and 2 child process(es)...
+22:26:37  Background: Agent #0/#1 child process exited
+```
+
+**本次跑出来的三条事实（都已回写代码）**：
+
+1. **两条判据只差 1 秒**（22:26:36 关游戏 → 22:26:37 stop_agent）。第一次实现看到关游戏就收工，
+   导致 `state.json` 永久写着「无 stop_agent 标记」，让事后读日志的人以为该信号从未出现。
+   ⇒ 已改成「关游戏后**继续在收尾宽限里 poll**，拿到主判据就用主判据，拿不到才退回辅助证据」
+   （`probe/zmd_wait_selfcheck.py` 三分支覆盖：升级 / 如实退回 / 无信号⇒UNKNOWN）。
+2. **帧坐标 ≠ client 坐标**：`win32.client_to_screen(hwnd,800,792)=(1567,1131)`，而帧平移
+   `(rect.left+800, rect.top+792)=(1559,1130)` —— **差 8px，会点空**。帧是整窗 rect 的 BitBlt（含边框）。
+   ⇒ `capture.Frame.screen_xy()` 成为唯一换算入口（越界抛 INV-17）。
+3. **MaaEnd 完成后不立刻退出**（与 ww/nte 相反）：`stop_agent` 之后 `MaaEnd.exe` 仍在，节点 9 因此判定
+   「正常完成，不杀任何进程」。同秒观测到 `Endfield.exe` 仍存活是**竞态**（`taskkill` 同一秒完成，事后复检已无该进程）。
+   后续观测：完成 29 分钟后（22:55:59 事件循环收尾 → 22:56:14 `[telemetry] 已结束 Session`）它才退出，
+   **日志没有 exit 命令行**，故无法判定那是人工关闭还是自身退出 ⇒ 判据不能依赖进程消失（INV-30）。
+
+**离线验证（同一轮完成）**：
+
+| 项 | 结果 |
+| --- | --- |
+| `probe/zmd_locate_selfcheck.py`（locator 交付） | exit 0，25 PASS（含「裁掉左 30px 仍正确定位」证明无硬编码） |
+| 定位的 Lead 独立复核 | 7/7 PASS（`box` 四边误差 0、负例抛 INV-24、uint8 回绕防护） |
+| `probe/zmd_verdict_selfcheck.py`（真实切片回放） | exit 0，ALL PASSED |
+| 判据的 Lead 独立复核 | 14/14 PASS（含「拷真实日志当基线⇒UNKNOWN，不把上一次 stop 当本次完成」的反证） |
+| `probe/zmd_wait_selfcheck.py`（本次新增） | 3/3 PASS（证据升级 / 如实退回 / UNKNOWN） |
+| 全链 dry-run | `--target zmd --dry-run --no-launch` 8 节全绿，退出码 0 |
+| 回归 | `programs.self_check()==[]`、`targets.self_check()==[]`、`probe/_probe_ww_verdict.py`（ok-ww 8 份历史日志判定不变） |
+
+**顺带修掉的一个真 bug（ww/nte 同样受害）**：`step9` 的 dry-run 早退。
+dry-run 根本不杀进程，旧代码却落到「仍有进程存活」判定，打印「已等待 5s 仍未退出 —— 这次确实可能是权限问题」
+并报 `failed`/退出码 3，让整条链在最后一节**假失败**。
 
 ### 出口条件
 

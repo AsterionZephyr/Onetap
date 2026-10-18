@@ -1,0 +1,163 @@
+# ZmdLogWindow / zmd_verdict 回放 fixture —— MaaEnd（program key = "zmd"）真实历史切片
+# 来源：E:/TOOLS/ScriptsGames/zmd/debug/mxu-tauri.log（只读切片，未改一字；行首方括号内是原文时间戳）
+# 切片：2026-10-17 23:43:58 起的那次完整运行（第 4 次实测运行，start_tasks → stop_agent_impl）
+# 段落格式：以 '### <名字>' 开头的行是段标题，其余是日志原文（一条一行）
+# 为什么留这份原文：判据的正则、次序（start 先于 pretask 失败）都只能对着真日志定，
+# 不能靠记忆重造 —— 造出来的样本永远恰好匹配写出来的正则（自证循环）。
+### partial
+[2026-10-17][23:43:58][DEBUG][mxu_lib::commands::maa_agent] [start_tasks] All tasks submitted, total: 12 task_ids
+[2026-10-17][23:43:58][DEBUG][mxu_lib::commands::maa_agent] [start_tasks] TaskRunState updated
+[2026-10-17][23:43:58][INFO][mxu_lib::commands::maa_agent] [start_tasks] start_tasks_impl completed successfully, returning 12 task_ids
+[2026-10-17][23:43:59][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:47:26][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_weapon_expcard_high.png"
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_plant_mushroom_seed_1_1.png"
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_plant_mushroom_1_1.png"
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\5\\item_expcard_stage2_high.png"
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_1_1.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_1_1.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_1_1.png` not found; fallback to index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png` not found; fallback to index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_expcard_stage2_high.png` not found; fallback to resource/image/IconRecognition/5/item_expcard_stage2_high.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_expcard_stage2_high.png` not found; fallback to resource/image/IconRecognition/5/item_expcard_stage2_high.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_expcard_stage2_high.png` not found; fallback to index.html
+[2026-10-17][23:48:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_spaceship_credit.png"
+[2026-10-17][23:48:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png.html
+[2026-10-17][23:48:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png/index.html
+[2026-10-17][23:48:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to index.html
+[2026-10-17][23:49:03][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:49:18][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png.html
+[2026-10-17][23:49:18][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png/index.html
+[2026-10-17][23:49:18][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to index.html
+[2026-10-17][23:49:24][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png.html
+### full
+[2026-10-17][23:43:58][DEBUG][mxu_lib::commands::maa_agent] [start_tasks] All tasks submitted, total: 12 task_ids
+[2026-10-17][23:43:58][DEBUG][mxu_lib::commands::maa_agent] [start_tasks] TaskRunState updated
+[2026-10-17][23:43:58][INFO][mxu_lib::commands::maa_agent] [start_tasks] start_tasks_impl completed successfully, returning 12 task_ids
+[2026-10-17][23:43:59][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:47:26][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_weapon_expcard_high.png"
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_plant_mushroom_seed_1_1.png"
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_plant_mushroom_1_1.png"
+[2026-10-17][23:48:17][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\5\\item_expcard_stage2_high.png"
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_1_1.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_1_1.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_1_1.png` not found; fallback to index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png` not found; fallback to resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_plant_mushroom_seed_1_1.png` not found; fallback to index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_expcard_stage2_high.png` not found; fallback to resource/image/IconRecognition/5/item_expcard_stage2_high.png.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_expcard_stage2_high.png` not found; fallback to resource/image/IconRecognition/5/item_expcard_stage2_high.png/index.html
+[2026-10-17][23:48:17][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_expcard_stage2_high.png` not found; fallback to index.html
+[2026-10-17][23:48:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_spaceship_credit.png"
+[2026-10-17][23:48:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png.html
+[2026-10-17][23:48:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png/index.html
+[2026-10-17][23:48:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to index.html
+[2026-10-17][23:49:03][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:49:18][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png.html
+[2026-10-17][23:49:18][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to resource/image/IconRecognition/4/item_spaceship_credit.png/index.html
+[2026-10-17][23:49:18][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_spaceship_credit.png` not found; fallback to index.html
+[2026-10-17][23:49:24][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png.html
+[2026-10-17][23:49:24][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png/index.html
+[2026-10-17][23:49:24][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to index.html
+[2026-10-17][23:49:24][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\6\\item_diamond.png"
+[2026-10-17][23:49:36][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_gachabyproducts_weapongold.png` not found; fallback to resource/image/IconRecognition/6/item_gachabyproducts_weapongold.png.html
+[2026-10-17][23:49:36][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_gachabyproducts_weapongold.png` not found; fallback to resource/image/IconRecognition/6/item_gachabyproducts_weapongold.png/index.html
+[2026-10-17][23:49:36][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_gachabyproducts_weapongold.png` not found; fallback to index.html
+[2026-10-17][23:49:36][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\6\\item_gachabyproducts_weapongold.png"
+[2026-10-17][23:49:43][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_expcard_stage2_low.png` not found; fallback to resource/image/IconRecognition/4/item_expcard_stage2_low.png.html
+[2026-10-17][23:49:43][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_expcard_stage2_low.png` not found; fallback to resource/image/IconRecognition/4/item_expcard_stage2_low.png/index.html
+[2026-10-17][23:49:43][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_expcard_stage2_low.png` not found; fallback to index.html
+[2026-10-17][23:49:43][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_expcard_stage2_low.png"
+[2026-10-17][23:49:54][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png.html
+[2026-10-17][23:49:54][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png/index.html
+[2026-10-17][23:49:54][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to index.html
+[2026-10-17][23:50:01][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_weapon_break_low.png` not found; fallback to resource/image/IconRecognition/3/item_weapon_break_low.png.html
+[2026-10-17][23:50:01][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_weapon_break_low.png` not found; fallback to resource/image/IconRecognition/3/item_weapon_break_low.png/index.html
+[2026-10-17][23:50:01][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_weapon_break_low.png` not found; fallback to index.html
+[2026-10-17][23:50:01][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\3\\item_weapon_break_low.png"
+[2026-10-17][23:50:05][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:50:58][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:51:44][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:52:06][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:52:36][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:55:09][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:55:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\3\\item_char_skill_level_1_6.png"
+[2026-10-17][23:55:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\5\\item_adventureexp.png"
+[2026-10-17][23:55:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_ap_supply_lt_n.png"
+[2026-10-17][23:55:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_gold.png"
+[2026-10-17][23:55:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\5\\item_cbp_exp.png"
+[2026-10-17][23:55:21][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\3\\item_expcard_2_3.png"
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_char_skill_level_1_6.png` not found; fallback to resource/image/IconRecognition/3/item_char_skill_level_1_6.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_char_skill_level_1_6.png` not found; fallback to resource/image/IconRecognition/3/item_char_skill_level_1_6.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_char_skill_level_1_6.png` not found; fallback to index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_ap_supply_lt_n.png` not found; fallback to resource/image/IconRecognition/4/item_ap_supply_lt_n.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_ap_supply_lt_n.png` not found; fallback to resource/image/IconRecognition/4/item_ap_supply_lt_n.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_ap_supply_lt_n.png` not found; fallback to index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_gold.png` not found; fallback to resource/image/IconRecognition/4/item_gold.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_gold.png` not found; fallback to resource/image/IconRecognition/4/item_gold.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_gold.png` not found; fallback to index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_adventureexp.png` not found; fallback to resource/image/IconRecognition/5/item_adventureexp.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_adventureexp.png` not found; fallback to resource/image/IconRecognition/5/item_adventureexp.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_adventureexp.png` not found; fallback to index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_cbp_exp.png` not found; fallback to resource/image/IconRecognition/5/item_cbp_exp.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_cbp_exp.png` not found; fallback to resource/image/IconRecognition/5/item_cbp_exp.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/5/item_cbp_exp.png` not found; fallback to index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to resource/image/IconRecognition/3/item_expcard_2_3.png.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to resource/image/IconRecognition/3/item_expcard_2_3.png/index.html
+[2026-10-17][23:55:21][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to index.html
+[2026-10-17][23:56:05][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_char_break_stage_1_2.png` not found; fallback to resource/image/IconRecognition/3/item_char_break_stage_1_2.png.html
+[2026-10-17][23:56:05][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_char_break_stage_1_2.png` not found; fallback to resource/image/IconRecognition/3/item_char_break_stage_1_2.png/index.html
+[2026-10-17][23:56:05][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_char_break_stage_1_2.png` not found; fallback to index.html
+[2026-10-17][23:56:05][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_gold.png` not found; fallback to resource/image/IconRecognition/4/item_gold.png.html
+[2026-10-17][23:56:05][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_gold.png` not found; fallback to resource/image/IconRecognition/4/item_gold.png/index.html
+[2026-10-17][23:56:05][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_gold.png` not found; fallback to index.html
+[2026-10-17][23:56:06][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\3\\item_char_break_stage_1_2.png"
+[2026-10-17][23:56:06][DEBUG][mxu_lib::commands::file_ops] Reading local file (base64): "E:\\TOOLS\\ScriptsGames\\zmd\\resource\\image\\IconRecognition\\4\\item_bp_double_reward.png"
+[2026-10-17][23:56:06][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_bp_double_reward.png` not found; fallback to resource/image/IconRecognition/4/item_bp_double_reward.png.html
+[2026-10-17][23:56:06][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_bp_double_reward.png` not found; fallback to resource/image/IconRecognition/4/item_bp_double_reward.png/index.html
+[2026-10-17][23:56:06][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_bp_double_reward.png` not found; fallback to index.html
+[2026-10-17][23:56:29][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png.html
+[2026-10-17][23:56:29][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png/index.html
+[2026-10-17][23:56:29][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to index.html
+[2026-10-17][23:56:29][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to resource/image/IconRecognition/3/item_expcard_2_3.png.html
+[2026-10-17][23:56:29][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to resource/image/IconRecognition/3/item_expcard_2_3.png/index.html
+[2026-10-17][23:56:29][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to index.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to resource/image/IconRecognition/6/item_diamond.png/index.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/6/item_diamond.png` not found; fallback to index.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to resource/image/IconRecognition/4/item_weapon_expcard_high.png/index.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/4/item_weapon_expcard_high.png` not found; fallback to index.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to resource/image/IconRecognition/3/item_expcard_2_3.png.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to resource/image/IconRecognition/3/item_expcard_2_3.png/index.html
+[2026-10-17][23:56:37][DEBUG][tauri::manager] Asset `resource/image/IconRecognition/3/item_expcard_2_3.png` not found; fallback to index.html
+[2026-10-17][23:56:48][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:58:25][INFO][mxu_lib::mxu_actions] [MXU_KILLPROC] Received param: {"kill_self":false,"process_name":"Endfield.exe"}
+[2026-10-17][23:58:25][INFO][mxu_lib::mxu_actions] [MXU_KILLPROC] Killing process: Endfield.exe
+[2026-10-17][23:58:25][DEBUG][mxu_lib::commands::state] maa_get_all_states called
+[2026-10-17][23:58:25][INFO][mxu_lib::mxu_actions] [MXU_KILLPROC] taskkill succeeded: �ɹ�: ����ֹ���� "Endfield.exe"���� PID Ϊ 17032��
+[2026-10-17][23:58:26][INFO][mxu_lib::commands::maa_agent] stop_agent_impl called for instance: yj2gs5w
+### pretask_fail
+[2026-10-17][23:40:46][DEBUG][reqwest::connect] starting new connection: https://end.maafw.com/
+[2026-10-17][23:40:46][DEBUG][reqwest::connect] proxy(http://127.0.0.1:7897/) intercepts 'https://end.maafw.com/'
+[2026-10-17][23:40:46][DEBUG][hyper_util::client::legacy::connect::http] connecting to 127.0.0.1:7897
+[2026-10-17][23:40:46][DEBUG][hyper_util::client::legacy::connect::http] connected to 127.0.0.1:7897
+[2026-10-17][23:40:46][DEBUG][hyper_util::client::legacy::pool] pooling idle connection for ("https", end.maafw.com)
+[2026-10-17][23:42:29][INFO][mxu_lib::commands::system] run_pretask: instance_id=yj2gs5w, program=agent/go-service, args=["--pretask", "LaunchGamePC", "{\"LaunchGamePCRegion\":\"CN\",\"LaunchGamePCLauncherPath\":\"Auto\",\"LaunchGamePCGameSetting\":\"No\"}"], cwd=Some("E:\\TOOLS\\ScriptsGames\\zmd")
+[2026-10-17][23:42:29][INFO][agent] [pretask:go-service][stdout] [90m2026-10-17T23:42:29+08:00[0m [31mERR[0m [1mgithub.com/MaaXYZ/MaaEnd/agent/go-service/pretask/launchgamepc/launchgamepc.go:158[0m[36m >[0m [1m无法找到启动器，请在任务设置中手动填写路径[0m [36merror=[0m[31m[1m"uninstall key 33a0a6296a20400d503c59ac0fd6341e not found"[0m[0m [36mcomponent=[0mlaunchgamepc [36mregion=[0mCN [36muninstall_key=[0m33a0a6296a20400d503c59ac0fd6341e
+[2026-10-17][23:42:29][INFO][mxu_lib::commands::system] run_pretask finished with exit code: 1

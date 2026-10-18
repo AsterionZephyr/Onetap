@@ -91,7 +91,33 @@ def identity_check(rgb, registry, log):
     return ident
 
 
+def identity_check_zmd(rgb, log):
+    """MaaEnd 的身份校验：**底部那个绿色「开始任务」必须在场**。
+
+    为什么不复用 ☰（`match.find_menu_glyph`）或侧栏模板：MaaEnd 是 Tauri 界面，
+    既没有 ok-ww 的侧栏、也没有 ok-nte 的青色侧条，`templates/` 里同样没有它的图。
+    强行为它采集一张模板，等于把「身份判据」绑在一个随时会变的 UI 元素上。
+
+    改用**这个程序独有的那个元素**：底部控制条的绿色开始按钮。它在 MaaEnd 的
+    所有页面上都存在，而在**别的程序**里几乎不可能同时满足「底部 15% 带 +
+    这个尺寸 + 这个长宽比 + 高白占比」。于是它同时是：
+
+        身份证据   —— 帧里有它 ⇒ 这帧几乎必然是 MaaEnd
+        定位结果   —— 下一步要点的就是它
+
+    两者**不可能不一致**（同一次匹配），省掉一次重复匹配，也省掉「身份通过但
+    定位失败」这种自相矛盾的状态。若窗口已被全屏游戏盖住，按钮必然不在帧里，
+    同样会被拦住 —— 这正是我们最需要在节点 6 拦住的那件事。
+    """
+    info = match.zmd_locate_start(rgb, log=log)
+    btn = info["button"]
+    log(f"    [OK] 底部绿色「开始任务」在场 box={tuple(btn['box'])} "
+        f"（INV-12：确认这帧真的来自 MaaEnd）")
+    return {"score": 1.0, "pos": tuple(btn["center"])}
+
+
 def body(args, state, log):
+    prog = context.resolve_program(state, args, log=log)
     registry = assets_mod.Registry()
     log("\n[图像库]")
     log(registry.report())
@@ -125,10 +151,12 @@ def body(args, state, log):
             log("  [跳过] 身份校验")
             return "ok", data, f"[离线] {w}x{h}（身份校验已跳过）"
         try:
-            ident = identity_check(rgb, registry, log)
+            ident = (identity_check_zmd(rgb, log) if prog.key == "zmd"
+                     else identity_check(rgb, registry, log))
         except (GuardFailure, DiscoveryFailure) as e:
             log(f"    [!!] 身份校验失败：{e}")
-            return "failed", {**data, "identity": None}, "身份校验失败（帧可能不是 ok-ww）"
+            return "failed", {**data, "identity": None}, \
+                f"身份校验失败（帧可能不是 {prog.display}）"
         data["identity"] = {"score": ident["score"], "pos": list(ident["pos"])}
         return "ok", data, f"[离线] {w}x{h} 身份 {ident['score']:.4f}"
 
@@ -199,15 +227,20 @@ def body(args, state, log):
 
         log(f"  [身份校验] 第 {attempt} 次")
         try:
-            ident = identity_check(f.rgb, registry, log)
+            ident = (identity_check_zmd(f.rgb, log) if prog.key == "zmd"
+                     else identity_check(f.rgb, registry, log))
         except (GuardFailure, DiscoveryFailure) as e:
             log(f"    [!!] 身份校验失败：{e}")
             if time.time() >= deadline:
                 log(f"  [超时] 已重试 {attempt} 次、共 {args.identity_timeout:.0f}s，"
-                    f"仍检不到 ☰ —— 很可能是 ok-ww 的应用内浮层**一直**挡着左上角")
-                log(f"         （FAULT #14；该浮层非 Win32 子窗口，编排点不掉它）")
+                    f"仍检不到 {prog.display} 的身份锚点")
+                if prog.key == "zmd":
+                    log("         （多半是被全屏游戏盖住了 —— 抓帧抓到的是游戏的像素）")
+                else:
+                    log("         （FAULT #14：很可能是应用内浮层一直挡着左上角 ☰，"
+                        "该浮层非 Win32 子窗口，编排点不掉它）")
                 return "failed", {**data, "identity": None}, \
-                    "身份校验失败（帧可能不是 ok-ww，或左上角被 ok-ww 自身浮层遮挡）"
+                    f"身份校验失败（帧可能不是 {prog.display}，或界面被遮挡）"
             log(f"  [重试] {args.identity_interval:.1f}s 后再抓一次"
                 f"（等浮层消失，剩余 {deadline - time.time():.0f}s）")
             time.sleep(args.identity_interval)

@@ -202,6 +202,20 @@ def body(args, state, log):
                                   log=log, dry_run=state.dry_run)
     log(f"  终止 {len(res['killed'])} 个，跳过 {len(res['skipped'])} 个")
 
+    # ⚠️ dry-run **必须在这里返回**，不能落到下面那段「还有进程存活」判定：
+    # 我们**根本没杀**，进程当然还在，于是那段会打印
+    # 「已等待 5s 仍未退出 —— 这次确实可能是权限问题」并报 failed/退出码 3，
+    # 让整条链在最后一节停手。实测 `main.py --target zmd --dry-run` 就是这样
+    # 在节点 9 假失败（前 7 节全 OK）。dry-run 的语义是「只规划不执行」，
+    # 它的结论也只能是「计划了什么」，而不是「清理是否成功」。
+    if state.dry_run:
+        still = window.running(prog)
+        log(f"  [DRY RUN] 未终止任何进程（当前仍存活 {len(still)} 个，属预期）")
+        return ("ok",
+                {"reason": reason, "killed": [], "skipped": res["skipped"],
+                 "still_alive": [(n, p) for n, p, _ in still], "dry_run": True},
+                f"dry-run：计划终止 {len(res['skipped'])} 个，未实际执行")
+
     # ⚠️ FAULT #13：终止后**不能立刻**枚举就下结论。
     # 进程被 kill 到从进程表消失有延迟，实测「已终止 1 个」之后紧接一次
     # window.running(prog) 仍能读到同一个 pid ⇒ 误报 failed「仍有 1 个存活

@@ -60,6 +60,24 @@ class Frame:
     def top(self):
         return self.rect[1]
 
+    def screen_xy(self, cx, cy):
+        """帧内坐标 -> 屏幕坐标（**只差一个平移**）。
+
+        ⚠️ 为什么不能用 win32.client_to_screen：本框架的帧是**整窗 rect** 的
+        BitBlt（含标题栏与边框），而 client 坐标从**客户区**左上角算。
+        MaaEnd 实测偏移 (8,1)：同一像素点用 client_to_screen 换算得
+        (1567,1131)，真实屏幕位置是 (1559,1130) —— 差 8px，点下去就偏。
+        Qt 程序（ok-ww/ok-nte）因为无边框，两者恰好重合，所以这个坑
+        **只在接入带标准边框的窗口时**才暴露。
+
+        INV-17 的同类断言：坐标越界时不要静默返回，直接失败。
+        """
+        if not (0 <= cx < self.width and 0 <= cy < self.height):
+            raise GuardFailure(
+                "INV-17",
+                f"帧内坐标 ({cx},{cy}) 越界（帧 {self.width}x{self.height}）")
+        return self.left + int(cx), self.top + int(cy)
+
 
 def grab_frame(hwnd, expected_state=None, strict_content=True):
     """抓取窗口当前内容，并按 INV-1 / INV-12 / INV-13 / INV-17 校验。

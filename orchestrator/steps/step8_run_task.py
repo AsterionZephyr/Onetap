@@ -46,6 +46,7 @@ import os
 import re
 import time
 
+from .. import apps
 from .. import assets as assets_mod
 from .. import capture as capture_mod
 from .. import input as input_mod, match, state as state_mod, win32, window
@@ -53,6 +54,19 @@ from .. import programs as programs_mod
 from .. import verdict as verdict_mod
 from .. import watchdog as watchdog_mod
 from ..errors import GuardFailure
+# 节点 8 的通用助手已下沉到 frameops（docs/adr/0003 阶段二），这里 re-export
+# 是为了让旧的内部引用（本文件的既有调用点、probe/*）行为完全不变。
+from ..frameops import (  # noqa: F401  (re-export)
+    CLICK_BLOCK_COLS,
+    CLICK_BLOCK_MIN,
+    CLICK_BLOCK_ROWS,
+    CLICK_PIXEL_DELTA,
+    CLICK_PIXEL_FRAC,
+    finish,
+    frame_changed,
+    grab,
+    shot,
+)
 from ..orchestrator import (
     CHANGE_THRESHOLD, CLICK_RETRIES, CLICK_RETRY_INTERVAL, COMPLETED, FAILED,
     FREEZE_SECONDS, NAV_RETRIES, POLL_INTERVAL, STALLED, TIMEOUT, TOTAL_TIMEOUT,
@@ -82,322 +96,20 @@ def extra_args(ap):
 # ------------------------------------------------------------ 抓帧工具
 
 
-def grab(state, strict=True, log=None):
-    """抓一帧（每次都用**重新发现**的 hwnd，遵守 INV-14）。"""
-    hwnd = context.require_hwnd(state, log=None)
-    f = capture_mod.grab_frame(hwnd, strict_content=strict)
-    state.set("hwnd", hwnd)
-    return hwnd, f
+# 抓帧助手已下沉到 orchestrator/frameops.py::grab（三程序共用，docs/adr/0003）
 
 
-def shot(state, frame, tag, log=None):
-    from PIL import Image
-    path = state.shot_path(tag)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    Image.fromarray(frame.rgb if hasattr(frame, "rgb") else frame).save(path)
-    state.add_shot("8", path)
-    if log:
-        log(f"  [落盘] {os.path.relpath(path, state.run_dir)}")
-    return path
+# 8a 导航（ok-ww）=> orchestrator/apps/ww.py::navigate_to_tasks
 
 
-# ------------------------------------------------------------ 8a 导航
-
-
-def navigate_to_tasks(state, frame, registry, args, log):
-    """若不在任务页，点侧栏图标导航过去。返回 (frame, navigated)。
-
-    导航是**闭环**的：点击后重新抓帧并验证目标行是否出现，因为真实光标点击有
-    落空的可能（窗口失焦时 ok-ww 会静默挂起而不报错）。
-
-    ⚠️ 侧栏图标位置**不硬编码**：它由资产匹配得出（实测恒在窗口内 (16,215)，
-    但 215 这个 y 是 1822x1000 帧实测值，换尺寸先验证再说）。
-    """
-    log("\n[8a] 导航：确认当前在任务页")
-    row_tpl = registry["daily_row"].load()
-
-    for attempt in range(1, NAV_RETRIES + 1):
-        try:
-            match.locate_daily_row(frame.rgb, row_tpl)
-            if attempt > 1:
-                log(f"  [OK] 第 {attempt} 次抓帧确认：已在任务页")
-            else:
-                log("  [OK] 已在任务页（锚点可唯一定位）")
-            return frame, attempt > 1
-        except GuardFailure as e:
-            log(f"  第 {attempt} 次判定：当前页没有目标行 —— "
-                f"{e.detail.splitlines()[0]}")
-
-        if attempt >= NAV_RETRIES:
-            break
-
-        # 离线 / dry-run：不点击，直接把"当前页不在任务页"作为结论返回，
-        # 交给 --only-locate 的定位环节去暴露锚点问题（这正是离线调试想要的）。
-        if args.offline or args.dry_run:
-            log("  [离线/DRY RUN] 不点击导航；直接进入定位环节以检验锚点")
-            return frame, False
-
-        log("  点击侧栏「任务」图标导航")
-        # ⚠️ 绝不可复用 verify_identity 的 pos 当导航目标。
-        # `1_ww.png` 曾同时承担「身份锚点 + 导航目标」两个职责，那个复用
-        # 在改造前恰好成立；身份锚点改成 ☰ 检测后，pos 变成 ☰ 的位置，
-        # 于是导航**点到了 ☰**，页面永远不切换（实测连点 3 次仍停在「关于」页，
-        # 且不报错 —— 典型静默失效）。见 match.find_sidebar_item 的注释。
-        item = match.find_sidebar_item(frame.rgb, match.SIDEBAR_ITEM_TASKS, log=log)
-        if item is None:
-            raise GuardFailure(
-                "INV-24",
-                "无法程序化定位侧栏「任务」项（侧栏等距列表未识别）。\n"
-                "  => 可能原因：侧栏未展开、界面改版、或窗口尺寸不在预期范围。")
-        cx, cy = item["pos"]
-        hwnd = state.get("hwnd")
-        if not hwnd:
-            raise GuardFailure("INV-23", "导航需要窗口句柄，但当前没有（离线模式请加 --only-locate）")
-        sp = win32.client_to_screen(hwnd, cx, cy)
-        if sp is None:
-            raise GuardFailure("INV-23", "ClientToScreen 失败")
-        log(f"  侧栏「任务」为第 {match.SIDEBAR_ITEM_TASKS} 项"
-            f"（共 {item['n_items']} 项，行距 {item['pitch']}px），"
-            f"窗口内点=({cx},{cy}) -> 屏幕 ({sp[0]},{sp[1]})")
-        input_mod.guarded_click(hwnd, sp[0], sp[1],
-                                dry_run=False, log=log)
-        time.sleep(1.5)
-        _, frame = grab(state, strict=True, log=log)
-        shot(state, frame, f"nav-attempt{attempt}", log)
-
-    raise GuardFailure(
-        "INV-24",
-        f"导航 {NAV_RETRIES} 次后仍未进入任务页（锚点始终无法唯一定位）。\n"
-        f"  => 可能原因：ok-ww 版本升级导致界面改版（锚点需重新采集）、"
-        f"点击落空、或当前不在可导航的页面。")
-
-
-def nte_wait_game_settled(state, log):
-    """等 ok-nte 自动把游戏拉起来、且画面重新可读（FAULT #28）。
-
-    为什么需要：**ok-nte 窗口一出现就自己去拉游戏**（实测每次启动都有
-    `showEvent Kill Launcher After Start` → `Starting launcher from ...`，
-    间隔约 4 秒，与「点开始」无关）。游戏是全屏 DirectX，起来时屏幕抓图
-    返回纯黑 ⇒ 撞上这段就会 INV-13 失败。
-
-    实测成功与失败的唯一差别就是**节点 8 开工时游戏处于哪个阶段**：
-    游戏已稳定 ⇒ 一路通；正在起 ⇒ 抓帧全黑、节点 8 只活 2.4s。
-
-    判据落在「**抓帧是否可读**」而不是「进程在不在」：
-    进程刚出现时窗口还没全屏，此刻抓到的可能仍是 ok-nte，下一瞬才变黑。
-    故必须连续若干次抓到非全黑帧才算稳定。
-
-    返回 True 表示已稳定；False 表示等待超时（**不抛异常** —— 此时画面可能
-    只是暂时不可读，继续往下走让既有的 INV-13 闸门去裁决，比在这里直接
-    失败更符合「证据不足不臆断」）。
-    """
-    if not watchdog_mod.game_processes(programs_mod.NTE):
-        log(f"  ok-nte 会自动拉起游戏；等它出现（上限 {NTE_GAME_WAIT_SECONDS:.0f}s）")
-        t0 = time.time()
-        while time.time() - t0 < NTE_GAME_WAIT_SECONDS:
-            if watchdog_mod.game_processes(programs_mod.NTE):
-                log(f"  [OK] 游戏进程已出现（等了 {time.time() - t0:.0f}s）")
-                break
-            time.sleep(NTE_SETTLE_POLL)
-        else:
-            log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 仍未见游戏进程；"
-                "继续往下走（画面判据会自行裁决）")
-            return False
-    else:
-        log("  游戏进程已在运行")
-
-    # 连续 NTE_READABLE_SAMPLES 次抓到可读帧，才算画面稳定下来
-    hwnd = state.get("hwnd")
-    if not hwnd:
-        return False
-    good = 0
-    fg_fail = 0
-    t0 = time.time()
-    while time.time() - t0 < NTE_GAME_WAIT_SECONDS:
-        # ⚠️ 必须把「置前台失败」与「帧不可读」分开报（FAULT #29）。
-        # 原先二者共用一个 `except GuardFailure`，于是置前台连续失败时
-        # 被打成「画面仍未稳定」——**归因错误**，会把人引去查游戏遮挡，
-        # 而真凶是前台锁。两者都会让抓帧失败，但修法完全不同。
-        try:
-            input_mod.ensure_foreground(hwnd, log=None)
-        except GuardFailure as e:
-            fg_fail += 1
-            good = 0
-            time.sleep(NTE_SETTLE_POLL)
-            continue
-
-        try:
-            fr = capture_mod.grab_frame(hwnd)
-            good += 1
-            if good >= NTE_READABLE_SAMPLES:
-                log(f"  [OK] 画面已稳定（连续 {good} 次可读，"
-                    f"均值 RGB {fr.stats.get('mean_rgb') if fr.stats else '?'}）")
-                return True
-        except GuardFailure:
-            good = 0
-        time.sleep(NTE_SETTLE_POLL)
-
-    if fg_fail and good == 0:
-        log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 仍拿不到前台"
-            f"（置前台失败 {fg_fail} 次）—— 这不是画面问题，"
-            f"是**前台锁**被别的窗口占着（INV-8/FAULT #29）。"
-            f"请关掉占前台的窗口（常见：DSH 自己的窗口、浏览器）")
-    else:
-        log(f"  [警告] 等了 {NTE_GAME_WAIT_SECONDS:.0f}s 画面仍未稳定"
-            f"（连续可读仅 {good}/{NTE_READABLE_SAMPLES} 次）")
-    return False
-
-
-def nte_navigate_to_daily(state, frame, args, log):
-    """ok-nte 导航：确认/进入「日常任务」页。返回 (frame, navigated)。
-
-    ⚠️ 与 ok-ww 的差别（FAULT #22）：
-
-      1. **目标页是「日常任务」，不是「任务」**。ok-nte 侧栏里有**两组**菜单，
-         两组都含「任务」字样（上组 ▤「任务」＋下组「任务」/「日常任务」），
-         按名字子串定位必然歧义 ⇒ **只能按序号**。
-      2. 实测侧栏为 11 项等距列表（40.0px），**「日常任务」是第 4 项**。
-         该序号**不是**文档里写的 3（文档基于旧版布局）。
-      3. 页面判据不靠序号自证：点击后用 `nte_locate_start` **重新抓帧闭环验证**
-         （复选框 + 右下角开始按钮两个独立特征），序号只用来找点击位置。
-    """
-    log("\n[8a] 导航：确认当前在「日常任务」页（ok-nte）")
-
-    for attempt in range(1, NAV_RETRIES + 1):
-        try:
-            match.nte_locate_start(frame.rgb, log=(log if attempt == 1 else None))
-            if attempt > 1:
-                log(f"  [OK] 第 {attempt} 次抓帧确认：已在日常任务页")
-            else:
-                log("  [OK] 已在日常任务页（复选框 + 开始按钮双特征成立）")
-            return frame, attempt > 1
-        except GuardFailure as e:
-            log(f"  第 {attempt} 次判定：当前不是日常任务页 —— "
-                f"{e.detail.splitlines()[0]}")
-
-        if attempt >= NAV_RETRIES:
-            break
-
-        if args.offline or args.dry_run:
-            log("  [离线/DRY RUN] 不点击导航；直接进入定位环节以检验判据")
-            return frame, False
-
-        item = match.find_sidebar_item(frame.rgb, match.NTE_SIDEBAR_ITEM_DAILY,
-                                       log=log)
-        if item is None:
-            raise GuardFailure(
-                "INV-24",
-                f"无法程序化定位 ok-nte 侧栏第 "
-                f"{match.NTE_SIDEBAR_ITEM_DAILY} 项（日常任务）。\n"
-                "  => 可能原因：侧栏未展开、界面改版、窗口过矮。")
-
-        hwnd = state.get("hwnd")
-        if not hwnd:
-            raise GuardFailure("INV-23", "导航需要窗口句柄（离线模式请加 --only-locate）")
-        cx, cy = item["pos"]
-        sp = win32.client_to_screen(hwnd, cx, cy)
-        if sp is None:
-            raise GuardFailure("INV-23", "ClientToScreen 失败")
-        log(f"  侧栏第 {match.NTE_SIDEBAR_ITEM_DAILY} 项"
-            f"（共 {item['n_items']} 项，行距 {item['pitch']}px）"
-            f"窗口内点=({cx},{cy}) -> 屏幕 ({sp[0]},{sp[1]})")
-        input_mod.guarded_click(hwnd, sp[0], sp[1], dry_run=False, log=log)
-        time.sleep(1.5)
-        _, frame = grab(state, strict=True, log=log)
-        shot(state, frame, f"nte-nav-attempt{attempt}", log)
-
-    raise GuardFailure(
-        "INV-24",
-        f"ok-nte 导航 {NAV_RETRIES} 次后仍未进入日常任务页。\n"
-        f"  => 可能原因：界面改版、点击落空、或当前不在可导航的页面。")
-
-
-def nte_locate_start_button(state, frame, log, offline=False):
-    """ok-nte 定位「开始」按钮并换算屏幕坐标。
-
-    返回 (screen_coords, loc)。
-    """
-    log("\n[8b] 定位任务页与「开始」按钮（ok-nte）")
-    loc = match.nte_locate_start(frame.rgb, log=log)
-    btn = loc["button"]
-    bx0, by0, bx1, by1 = btn["box"]
-    cx, cy = btn["center"]
-    log(f"  已勾选任务 {loc['n_checked']} 项；行中心 = "
-        f"{[round(b['cy']) for b in loc['boxes']]}")
-    log(f"  开始按钮 窗口内 x={bx0}..{bx1} y={by0}..{by1} 中心=({cx},{cy})")
-
-    h, w = frame.rgb.shape[:2]
-    if not (cx > w * 0.5 and cy > h * 0.8):
-        raise GuardFailure(
-            "INV-19",
-            f"交叉验证失败：ok-nte 的「开始」应在右下角，"
-            f"实测中心 ({cx},{cy}) 不在右下象限（帧 {w}x{h}）")
-
-    # ⚠️ 离线判定要看 offline 形参，**不能只看 hwnd 是否存在**：
-    # --offline 时 state 里可能残留上一次运行的 hwnd，对它调 ClientToScreen
-    # 会失败并报 INV-23，把「离线定位其实已经成功」伪装成失败（实测踩过）。
-    hwnd = None if offline else state.get("hwnd")
-    if hwnd:
-        sp = win32.client_to_screen(hwnd, cx, cy)
-        if sp is None:
-            raise GuardFailure("INV-23", "ClientToScreen 失败")
-        log(f"  屏幕坐标 = ({sp[0]},{sp[1]})")
-    else:
-        sp = (cx, cy)
-        log(f"  [离线] 无窗口，窗口内坐标 = ({cx},{cy})")
-    return sp, loc
+# 8a/8b（ok-nte）=> orchestrator/apps/nte.py::nte_wait_game_settled / nte_navigate_to_daily /
+#                nte_locate_start_button
 
 
 # ------------------------------------------------------------ 8b 定位
 
 
-def locate_and_click_start(state, frame, registry, log):
-    """定位「每日任务」行 -> 扫描同行「开始」按钮 -> 交叉验证。
-
-    返回 (screen_coords, row_y0, row_y1, loc)。
-    """
-    log("\n[8b] 定位「每日任务」行")
-    asset = registry["daily_row"]
-    row_tpl = asset.load()
-
-    # INV-4：出生尺寸校验。行模板是局部截图，不能要求与窗口同尺寸，
-    # 故只在登记了出生尺寸且明显不同源时告警，不阻断。
-    same, why = asset.check_born_size(frame.width, frame.height)
-    log(f"  出生尺寸：{why}")
-    if not same:
-        log(f"    [警告] 资产与当前帧不同源 —— 锚点分数可能偏低，"
-            f"必要时用 refresh_assets.py 重采")
-
-    loc = match.locate_daily_row(frame.rgb, row_tpl)
-    a = loc["anchor"]
-    log(f"  锚点「日历图标+每日任务」score={a['score']:.4f} "
-        f"pos={a['pos']} 尺寸={a['size'][0]}x{a['size'][1]}")
-    log(f"  联合唯一性：{len(loc['candidates'])} 个候选，"
-        f"1 个同时满足「同行有开始按钮」-> [OK]")
-
-    row_y0, row_y1 = loc["row_y0"], loc["row_y1"]
-    btn = loc["button"]
-    bx0, by0, bx1, by1 = btn["box"]
-    cx, cy = btn["center"]
-    log(f"  行范围 y={row_y0}..{row_y1}")
-    log(f"  开始按钮 窗口内 x={bx0}..{bx1} y={by0}..{by1} 中心=({cx},{cy})")
-
-    if not (row_y0 <= cy <= row_y1):
-        raise GuardFailure(
-            "INV-19",
-            f"交叉验证失败：按钮中心 y={cy} 不在行 {row_y0}..{row_y1} 内")
-
-    hwnd = state.get("hwnd")
-    if hwnd:
-        sp = win32.client_to_screen(hwnd, cx, cy)
-        if sp is None:
-            raise GuardFailure("INV-23", "ClientToScreen 失败")
-        log(f"  屏幕坐标 = ({sp[0]},{sp[1]})")
-    else:
-        # 离线：没有窗口，窗口内坐标就是最终结论
-        sp = (cx, cy)
-        log(f"  [离线] 无窗口，窗口内坐标 = ({cx},{cy})（未经 ClientToScreen 换算）")
-    return sp, row_y0, row_y1, loc
+# 8b 定位（ok-ww）=> orchestrator/apps/ww.py::locate_and_click_start
 
 
 # ------------------------------------------------- 8c/8d 点击 + 验证
@@ -414,100 +126,10 @@ def locate_and_click_start(state, frame, registry, log):
 # 对「局部变化」不敏感。改为分块看**最大块差**，并辅以「有多少像素真的变了」。
 #
 # 实测本次样本：最大块差 3.20（块 行0列3，就是那条 toast）；变化>10 的像素 0.5%。
-CLICK_BLOCK_ROWS = 8          # 分块网格行数
-CLICK_BLOCK_COLS = 8          # 分块网格列数
-CLICK_BLOCK_MIN = 2.0         # 任一块平均差 >= 此值即认为「有局部变化」
-CLICK_PIXEL_DELTA = 10        # 单像素差超过此值才算「真的变了」
-CLICK_PIXEL_FRAC = 0.002      # 变化像素占比 >= 0.2% 即认为「有变化」（实测 0.5%）
+# FAULT #23 的判据常量（CLICK_BLOCK_* / CLICK_PIXEL_*）与 frame_changed()
+# 一起下沉到 orchestrator/frameops.py —— apps/*.py 也要用，不能留在节点 8 里。
 
-# ok-nte 见到终止标记后的**收尾宽限**（FAULT #27）。
-# 终止标记是「将要退出」的宣告；实测它还要 5.0s 才开始杀游戏、10.1s 才写完
-# `ok:quit app`。立刻返回会让节点 9 抢在它关游戏之前把它杀掉，
-# 留下全屏孤儿游戏窗口。这段窗口内等它自己退出（等不到就交给节点 9）。
-NTE_SETTLE_SECONDS = 20.0
-
-# --- FAULT #28：ok-nte 一启动就自动拉游戏，游戏全屏会把抓帧打成全黑 --------
-#
-# 实测（ok-script.log 每次启动都有这一对，间隔 ~4 秒）：
-#
-#     MainWindow:MainWindow showEvent Kill Launcher After Start
-#     LauncherTask:Starting launcher from configured path: ...NTEGame.exe
-#
-# 即 **ok-nte 窗口一出现就自己去拉游戏**，与「点开始」无关。
-# 游戏起来时是全屏 DirectX，屏幕抓图返回**纯黑** ⇒ INV-13 拦住 ⇒ 节点 8 只有 2.4s
-# 就 FAILED（实测 run-20261016-031137）。
-#
-# 成功与失败只差**时序**：
-#   - run-20261016-024410（成功）：节点 8 起跑 02:44:10；游戏 02:45:29 就位；
-#     点击在 02:46+ ⇒ 点的时候游戏早已稳定，画面可读。
-#   - run-20261016-031137（失败）：节点 8 起跑 03:11:37；03:12:35 ok-nte 拉游戏；
-#     节点 8 恰在 **03:12:35** 开始干活 ⇒ 抓帧撞上游戏全屏 ⇒ 全黑。
-#
-# 故节点 8 在 ok-nte 上开工前，必须先等「游戏拉起并稳定」这件事过去：
-#   1. 若游戏**尚未出现**：等它出现（ok-nte 一定会拉）；
-#   2. 出现后：再等画面**连续可读**（不是全黑）若干次，才算稳定。
-# 只看「进程在不在」不够 —— 进程刚出现时窗口还没全屏，抓到的可能仍是
-# ok-nte；而下一瞬就变全黑了。所以判据落在**抓帧是否可读**上。
-NTE_GAME_WAIT_SECONDS = 120.0   # 等游戏进程出现的上限（实测 03:12:35→03:12:58 约 23s）
-NTE_READABLE_SAMPLES = 3        # 需连续这么多次「可读」才算稳定
-NTE_SETTLE_POLL = 2.0           # 稳定检测的轮询间隔
-
-# FAULT #30：检测到「执行器暂停且零进展」后，再给它这么久自行恢复。
-# 实测恢复游戏窗口**有时**能让它继续（13s 后写 hwnd changed,connected:1），
-# **有时不能**（恢复后再度沉默）。所以先给宽限期，仍无进展才判定 STALLED。
-# 取 90s：足够容忍一次恢复尝试，又远小于 1800s 的兜底上限。
-NTE_STALL_GRACE_SECONDS = 90.0
-
-
-
-def frame_changed(before, after, log=None):
-    """判断点击后画面是否真的变了；返回 (changed, 说明串)。
-
-    **三个判据任一成立即算变化**（FAULT #23）：
-
-    1. 整帧平均差 >= CHANGE_THRESHOLD —— 原判据，对整页切换（ok-ww 导航）有效；
-    2. **任一 8x8 块**的平均差 >= CLICK_BLOCK_MIN —— 抓局部响应
-       （ok-nte 的 toast / 按钮按下态就靠这条）；
-    3. 变化像素（|Δ| > CLICK_PIXEL_DELTA）占比 >= CLICK_PIXEL_FRAC —— 兜底。
-
-    ⚠️ 为什么不能只留第 2 条：整块阈值对「大面积但幅度小的渐变」不敏感，
-    而第 1 条正好覆盖那种情形。三条**互补**，不是冗余。
-    """
-    b = before.astype("int16")
-    a = after.astype("int16")
-    if b.shape != a.shape:
-        # 尺寸变了本身就是「画面变了」（窗口被重建/缩放）
-        return True, f"帧尺寸改变 {b.shape} -> {a.shape}"
-
-    d = abs(a - b).mean(axis=2) if b.ndim == 3 else abs(a - b).astype("float64")
-    whole = float(d.mean())
-
-    H, W = d.shape
-    worst = 0.0
-    worst_rc = (0, 0)
-    for i in range(CLICK_BLOCK_ROWS):
-        y0, y1 = i * H // CLICK_BLOCK_ROWS, (i + 1) * H // CLICK_BLOCK_ROWS
-        for j in range(CLICK_BLOCK_COLS):
-            x0, x1 = j * W // CLICK_BLOCK_COLS, (j + 1) * W // CLICK_BLOCK_COLS
-            m = float(d[y0:y1, x0:x1].mean())
-            if m > worst:
-                worst, worst_rc = m, (i, j)
-
-    frac = float((d > CLICK_PIXEL_DELTA).mean())
-
-    why = (f"整帧={whole:.2f}/{CHANGE_THRESHOLD}"
-           f" 最大块={worst:.2f}@块{worst_rc}/{CLICK_BLOCK_MIN}"
-           f" 变化像素={frac * 100:.2f}%/{CLICK_PIXEL_FRAC * 100:.1f}%")
-    if log:
-        log(f"  点击后：{why}")
-
-    if whole >= CHANGE_THRESHOLD:
-        return True, why
-    if worst >= CLICK_BLOCK_MIN:
-        return True, why
-    if frac >= CLICK_PIXEL_FRAC:
-        return True, why
-    return False, why
+# ok-nte 的等待常量与 8e 实现 => orchestrator/apps/nte.py（NTE_SETTLE_SECONDS 等）
 
 
 def click_and_confirm(state, frame, registry, args, log, prog=None):
@@ -521,17 +143,15 @@ def click_and_confirm(state, frame, registry, args, log, prog=None):
     for attempt in range(1, CLICK_RETRIES + 1):
         log(f"\n[8c] 点击 第 {attempt}/{CLICK_RETRIES} 轮")
         if prog is not None and prog.key == "nte":
-            # ⚠️ FAULT #28：ok-nte 会自动拉游戏，全屏后抓帧全黑。
-            # 必须**先**等它拉完并稳定，再去做导航 —— 否则导航这一次抓帧
-            # 就会撞上全黑（实测节点 8 只活 2.4s 就 FAILED）。
-            # 只做一次：重试轮次里游戏已经在跑，不必重复等待。
+            nte_app = apps.get("nte")
             if attempt == 1 and not (args.offline or args.dry_run):
-                nte_wait_game_settled(state, log)
-            frame, _ = nte_navigate_to_daily(state, frame, args, log)
-            sp, _loc = nte_locate_start_button(state, frame, log, offline=args.offline)
+                nte_app.nte_wait_game_settled(state, log)
+            frame, _ = nte_app.nte_navigate_to_daily(state, frame, args, log)
+            sp, _loc = nte_app.nte_locate_start_button(state, frame, log, offline=args.offline)
         else:
-            frame, _ = navigate_to_tasks(state, frame, registry, args, log)
-            sp, _y0, _y1, _loc = locate_and_click_start(state, frame, registry, log)
+            ww_app = apps.get("ww")
+            frame, _ = ww_app.navigate_to_tasks(state, frame, registry, args, log)
+            sp, _y0, _y1, _loc = ww_app.locate_and_click_start(state, frame, registry, log)
         shot(state, frame, "about-to-click", log)
 
         before = frame.rgb.astype("int16")
@@ -561,305 +181,21 @@ def click_and_confirm(state, frame, registry, args, log, prog=None):
 # --------------------------------------------------------- 8e 等待完成
 
 
-def wait_for_nte_completion(state, args, log, window_log=None):
-    """ok-nte 的等待完成：**看日志**，不看画面（HANDOFF §6 / FRAMEWORK §0.1）。
-
-    ## 为什么 ok-nte 不能用 ok-ww 那套
-
-    ok-ww 把终态**画在界面上**（完成帧 `exit_notice`），所以它必须读画面。
-    ok-nte 反过来：它把终态**写进日志**
-    （`TaskExecutor:Successfully Executed Task, Exiting Game and App!`），
-    且游戏 `HTGame.exe` 全屏时屏幕抓图**必然全黑**（INV-13 会拒绝）——
-    读画面在 ok-nte 上既不可靠也无必要。
-
-    ## ★ 为什么用 LogWindow（字节偏移）而不是「按 ok:quit app 分段」
-
-    若上一次运行被**外部强制终止**（本框架的兜底清理正是如此），
-    它不会写 `ok:quit app` ⇒ 相邻两次运行被**合并成一段** ⇒
-    新一次运行**借用上一次的成功汇总**，实测在点击后 **1 秒**就报 SUCCESS
-    —— 假阳性，且**不报任何错**。按字节偏移切窗口与上一次如何收尾无关。
-
-    ## 判定只看「是否完成」
-
-    用户明确要求（m01268）：**个别任务失败与本项目无关，只看是否完成**。
-    失败详情另行取出打印，不参与判定。
-
-    ## ★ window_log 必须**在点击之前**武装（FAULT #25）
-
-    原实现把 `verdict_mod.LogWindow()` 放在本函数里构造，而本函数是在
-    `click_and_confirm` **之后**才被调用的 ⇒ 基线偏移取在点击之后 ⇒
-    点击与构造之间 ok-nte 写的任何日志**全部读不到**。
-    实测：ok-nte 点开始后 1 秒内就写了大量启动日志（甚至可能写终止标记），
-    而 `LogWindow()` 此时才构造，`text()` 恒为 0 ⇒ verdict 恒 `unknown`
-    ⇒ 整条 ok-nte 链**永远等不到完成**，且**不报错**。
-    修法：由调用方在点击**前**构造并 `mark()`，再传进来复用（形参 window_log）。
-    未传时退回在本函数内构造（保持向后兼容，但会打印警告）。
-    """
-    log(f"\n[8e] 等待完成（ok-nte 日志判据）：采样 {POLL_INTERVAL}s；"
-        f"兜底 {args.total_timeout:.0f}s")
-    log(f"  日志窗口 {verdict_mod.NTE_LOGDIR}")
-
-    if window_log is None:
-        log("  [!!] 未提供预武装的 LogWindow —— 基线偏移取在点击之后，"
-            "点击到此刻之间的日志会丢失（FAULT #25）")
-        window_log = verdict_mod.LogWindow()
-    else:
-        log(f"  日志窗口已预武装（点击前建立），当前已捕获 {len(window_log.text())} 字符")
-    started = time.time()
-    last_report = 0.0
-    last_alive = True
-    stall_since = None
-
-    while True:
-        now = time.time()
-        elapsed = now - started
-
-        if elapsed > args.total_timeout:
-            return TIMEOUT, f"整条链超过兜底上限 {args.total_timeout:.0f}s", None
-
-        window_log.poll()
-        alive = bool(window.running(program=programs_mod.NTE))
-        last_alive = alive
-        v, ev = window_log.verdict(still_running=alive)
-
-        # ⚠️ FAULT #30：执行器永久暂停时必须**提前**报出来，不能空等到超时。
-        # 游戏窗口被最小化时 ok-nte 写下 og.executor.pause pos_invalid(-32000,...)
-        # 然后停住：进程还在、终止标记永远不来 ⇒ 循环会一路轮询到
-        # --total-timeout（默认 1800s）才报 TIMEOUT，**白烧半小时且归因错误**。
-        # 这里改成：先等一个宽限期（给它自行恢复的机会，实测有时能恢复），
-        # 之后若仍无任何进展就直接判定为 STALLED 并说清原因。
-        paused, why = verdict_mod.nte_executor_paused(window_log.text())
-        if paused:
-            if stall_since is None:
-                stall_since = now
-                log(f"  [注意] {why}")
-                log(f"  [注意] 给它 {args.stall_grace:.0f}s 自行恢复"
-                    f"（实测恢复窗口有时有效、有时无效）…")
-            elif now - stall_since > args.stall_grace:
-                return STALLED, (f"ok-nte 执行器已暂停 {now - stall_since:.0f}s 无任何进展"
-                                 f"：{why}"), None
-        else:
-            if stall_since is not None:
-                log("  [OK] 执行器已恢复（继续等待）")
-            stall_since = None
-
-        if v == verdict_mod.SUCCESS:
-            # ⚠️ FAULT #27：**先让它自己收尾，别急着宣布完成**。
-            #
-            # ok-nte 的终止标记是「**将要**退出」的宣告，不是「已经退出」。
-            # 实测 10-15 那次：终止标记 00:23:15.570 → 真正开始杀游戏
-            # 00:23:20.571（+5.0s）→ `ok:quit app` 00:23:25.646（+10.1s）。
-            # 若一见到标记就返回，节点 9 会在 1 秒内杀掉 ok-nte，
-            # **正好打断它关游戏的那一步** ⇒ 游戏成了孤儿进程（全屏盖住一切）。
-            # 本轮实测就是这么发生的：标记 02:54:06.809，节点 9 在 0.8s 后动手，
-            # 日志停在标记那一行，`Killing process(es)` 一行都没写出来。
-            #
-            # 所以：给一段**有界**的 settle 窗口，等它把关闭动作做完。
-            # 判据是「它自己退出」，不是「等到日志不再增长」——
-            # 后者会被无关日志拖住。超时就继续往下走（尽量干净，但不无限等）。
-            # ⚠️ 只认 **settle 期间新增** 的日志：`poll()` 的返回值就是本次新增，
-            # 不能用 `text()` —— 后者返回**整轮累积**文本，会把本轮的任意一行
-            # 当成「刚刚关的游戏」（范围比判据意图大得多）。
-            settle_deadline = time.time() + NTE_SETTLE_SECONDS
-            new_text = ""
-            while time.time() < settle_deadline:
-                new_text += window_log.poll()
-                if not window.running(program=programs_mod.NTE):
-                    break
-                time.sleep(POLL_INTERVAL)
-
-            settled = not bool(window.running(program=programs_mod.NTE))
-            new_text += window_log.poll()
-            if re.search(verdict_mod.NTE_KILL_GAME, new_text, re.I):
-                log("  [OK] ok-nte 已自行关闭游戏")
-            elif settled:
-                # 没看到关游戏的日志，但它确实退干净了。
-                # 不报「已关游戏」——日志里没有证据（INV-30）。
-                log("  [注意] ok-nte 已自行退出，但日志中未见关闭游戏的记录；"
-                    "游戏可能仍在运行，请人工确认")
-            else:
-                log(f"  [注意] 等了 {NTE_SETTLE_SECONDS:.0f}s ok-nte 仍未退出，"
-                    "将交由节点 9 清理")
-
-            log(f"  +{elapsed:6.0f}s  *** 完成 ***（ok-nte 日志判据）")
-            for e in ev:
-                log(f"      {e}")
-            fails = window_log.failures()
-            if fails:
-                # 失败项**不影响判定**，但必须让人看见（用户要求）。
-                log(f"  [注意] 本次有 {len(fails)} 项子任务失败（不影响完成判定）："
-                    f"{fails}")
-            else:
-                log("  [OK] 无子任务失败")
-            state.set("verdict_evidence", ev)
-            return COMPLETED, "；".join(ev), None
-
-        if not alive and elapsed > POLL_INTERVAL * 2:
-            # 进程没了但日志里没有终止标记 —— 分不清「无事可做而异常退出」
-            # 与「崩溃」，按 INV-30 报 unknown，绝不默认成功。
-            log(f"  +{elapsed:6.0f}s  ok-nte 进程消失（日志中无终止标记）")
-            for e in ev:
-                log(f"      {e}")
-            return UNKNOWN, (
-                "ok-nte 进程消失，但日志中从未出现终止标记 —— 无法区分"
-                "「今日任务已完成、无事可做」与「崩溃」。这是证据不足，"
-                "不是判定失败。请人工核对 ok-nte 任务日志。"), None
-
-        if now - last_report > 30:
-            last_report = now
-            log(f"  +{elapsed:6.0f}s  … 仍在运行 "
-                f"（日志 {len(window_log.text())} 字节）")
-
-        time.sleep(POLL_INTERVAL)
+# 8e 等待（ok-nte）=> orchestrator/apps/nte.py::wait_for_nte_completion
 
 
-def wait_for_completion(state, registry, args, log, window_log=None):
-    """等待完成 / 超时。返回 (result, detail, shot_path)。
+# 8e 等待（ok-ww）=> orchestrator/apps/ww.py::wait_for_completion
 
-    判据（**FAULT #15 更正后**）：主判据是 **ok-ww 的日志终止标记**，
-    画面（完成帧 `exit_notice`）降为**补充证据**。
 
-    为什么改：长期记录说 ok-ww 只能看画面，而那幅完成帧从未采集，
-    于是节点 8 「只能以超时收场」。实测推翻 —— ok-ww 与 ok-nte 同属
-    ok-script 运行时，收尾写的是**逐字相同**的
-    `TaskExecutor:Successfully Executed Task, Exiting Game and App!`，
-    且凡跑到完成的运行都**恰好写一次**（见 verdict.ww_verdict 的注释）。
-    ⇒ 不需要那张截图也能判完成。
-
-    仍然**宁可漏判**（退回超时），**不可误判** —— 误判会把一次卡死当成成功。
-    """
-    if window_log is not None:
-        log(f"\n[8e] 等待完成（ok-ww 日志判据）：采样 {POLL_INTERVAL}s；"
-            f"冻结判定 {args.freeze_seconds:.0f}s；兜底 {args.total_timeout:.0f}s")
-        log(f"  日志窗口 {window_log.logdir}")
-        log(f"  日志窗口已预武装（点击前建立），当前已捕获 "
-            f"{len(window_log.text())} 字符")
-    else:
-        log(f"\n[8e] 等待完成：采样 {POLL_INTERVAL}s；"
-            f"冻结判定 {args.freeze_seconds:.0f}s；兜底 {args.total_timeout:.0f}s")
-
-    exit_tpl = None
-    exit_asset = registry.get("exit_notice")
-    if exit_asset and exit_asset.available:
-        exit_tpl = exit_asset.load()
-    if window_log is None and exit_tpl is None:
-        log("  [警告] 退出通知资产未采集，且未武装日志窗口 —— "
-            "无法判定「正常完成」，本节点只能以「超时」收场")
-    elif exit_tpl is None:
-        log("  [注] 退出通知资产仍未采集；改用**日志终止标记**判定完成"
-            "（FAULT #15：ok-ww 与 ok-nte 共用同一句终止标记）")
-
-    detector = state_mod.FreezeDetector(args.freeze_seconds)
-    started = time.time()
-    last_fp = None
-    completion_seen = False
-    last_report = 0.0
-    last_verdict = None
-
-    while True:
-        now = time.time()
-        elapsed = now - started
-
-        if elapsed > args.total_timeout:
-            return TIMEOUT, f"整条链超过兜底上限 {args.total_timeout:.0f}s", None
-
-        # --- 主判据：日志终止标记（FAULT #15）---
-        if window_log is not None:
-            window_log.poll()
-            v, vev = window_log.verdict(still_running=window.okww_running(),
-                                        program=programs_mod.WW)
-            if v != last_verdict:
-                log(f"  +{elapsed:6.0f}s  日志判据：{v}（{vev[-1] if vev else ''}）")
-                last_verdict = v
-            if v == verdict_mod.SUCCESS:
-                log(f"  +{elapsed:6.0f}s  *** 完成 ***（ok-ww 日志终止标记）")
-                for e in vev:
-                    log(f"        {e}")
-                # 收尾宽限（与 ok-nte 同策略，FAULT #27）：终止标记是
-                # 「**将要**退出」的宣告，随后它才去关游戏、关自己。
-                # 抢在这中间动手会打断它关游戏。
-                settle_end = time.time() + NTE_SETTLE_SECONDS
-                while time.time() < settle_end:
-                    window_log.poll()
-                    if not window.okww_running():
-                        break
-                    time.sleep(POLL_INTERVAL)
-                window_log.poll()
-                if re.search(verdict_mod.WW_KILL_GAME, window_log.text(), re.I):
-                    log("  [OK] ok-ww 已自行关闭游戏")
-                elif not window.okww_running():
-                    log("  [注意] ok-ww 已自行退出，但日志中未见关闭游戏的记录；"
-                        "游戏可能仍在运行，请人工确认")
-                else:
-                    log(f"  [注意] 等了 {NTE_SETTLE_SECONDS:.0f}s ok-ww 仍未退出，"
-                        "将交由节点 9 清理")
-                return COMPLETED, "日志出现终止标记：" + "；".join(vev), None
-
-        # ok-ww 进程没了 —— 分三种，**必须区分**（见文件头「终止行为三分」）
-        if not window.okww_running():
-            if completion_seen:
-                return COMPLETED, "ok-ww 已自行退出（此前抓到完成帧）", None
-            # 再给日志一次机会：进程刚退，收尾那几行可能才落盘
-            if window_log is not None:
-                window_log.poll()
-                v2, vev2 = window_log.verdict(still_running=False,
-                                              program=programs_mod.WW)
-                if v2 == verdict_mod.SUCCESS:
-                    log(f"  +{elapsed:6.0f}s  *** 完成 ***"
-                        f"（进程已退出，由日志确认）")
-                    return COMPLETED, "日志出现终止标记：" + "；".join(vev2), None
-            # 消失但没抓到完成帧 —— **成因不可辨**：
-            #   (a) 今日任务已完成 -> ok-ww 无事可做而异常退出（实测行为：
-            #       不关自己、不关游戏，需人工收尾）
-            #   (b) 崩溃
-            # 按 INV-30 报 UNKNOWN，**不默认成功、也不武断出错**。
-            log(f"  +{elapsed:6.0f}s  ok-ww 进程消失（日志中也没有终止标记）")
-            return UNKNOWN, (
-                "ok-ww 进程消失，但日志中没有终止标记 —— 无法区分「今日任务已完成、"
-                "无事可做而异常退出」与「崩溃」。这是证据不足，不是判定失败。"
-                "常见成因：今日任务此前已完成（ok-ww 找不到要做的任务会异常退出，"
-                "且不会关闭自己与游戏）。"
-            ), None
-
-        info = window.find_okww_window()
-        if not info:
-            time.sleep(POLL_INTERVAL)
-            continue
-        state.set("hwnd", info["hwnd"])   # INV-14：每轮重新发现
-
-        try:
-            f = capture_mod.grab_frame(info["hwnd"], strict_content=False)
-        except GuardFailure as e:
-            log(f"  [{e.invariant}] 本轮抓帧失败：{e.detail}")
-            time.sleep(POLL_INTERVAL)
-            continue
-
-        fp = float(f.rgb[::40, ::40].mean())
-        if last_fp is None or abs(fp - last_fp) > 0.5:
-            log(f"  +{elapsed:6.0f}s  画面指纹 {fp:.2f}  {f.width}x{f.height}")
-            last_fp = fp
-
-        if exit_tpl is not None:
-            ok, detail = state_mod.is_completion_frame(f.rgb, exit_tpl)
-            if ok:
-                log(f"  +{elapsed:6.0f}s  *** 完成帧 ***  {detail}")
-                path = shot(state, f, "completion", log)
-                completion_seen = True
-                state.set("completion_frame", os.path.relpath(
-                    path, state.run_dir).replace("\\", "/"))
-                return COMPLETED, detail, path
-
-        frozen, fdetail = detector.update(f.rgb, now)
-        if frozen:
-            log(f"  +{elapsed:6.0f}s  [超时] {fdetail}")
-            path = shot(state, f, "timeout", log)
-            return TIMEOUT, fdetail, path
-
-        if now - last_report > 30:
-            last_report = now
-            log(f"  +{elapsed:6.0f}s  … {fdetail}")
-
-        time.sleep(POLL_INTERVAL)
+# ------------------------------------------------ 8b~8e：MaaEnd（zmd）
+#
+# MaaEnd 的 8b~8e **整段**已迁到 orchestrator/apps/zmd.py（docs/adr/0003）：
+#   zmd_locate / zmd_click_and_confirm / zmd_wait_completion / zmd_run
+# 这里只剩一行分派（见 body()）。三段结构差异（单页 / 单层 / 只能读日志判完成）
+# 与「运行期为什么不能抓帧」的长注释也随代码一起搬走了。
+#
+# finish()（result -> 状态码的唯一映射）下沉到 orchestrator/frameops.py，
+# 因为所有程序都要用；shot()/frame_changed() 同处。
 
 
 # ------------------------------------------------------------- 主流程
@@ -896,6 +232,21 @@ def body(args, state, log):
         log(f"  首帧 {f.width}x{f.height} 均值RGB={f.stats['mean_rgb']}")
         shot(state, f, "task-loop-start", log)
 
+    # ★ MaaEnd 走**整段独立实现**（单页 / 单层 / Tauri 窗口类 / 日志判据），
+    # 在 8a 之前分派：它没有任务页要导航，若落进下面的 ok-ww 定位链，
+    # 第一步侧栏图标匹配就会失败 —— 而失败信息会指向「找不到侧栏」，
+    # 与真正的问题（这个程序没有侧栏）完全无关，把人引到错方向。
+    if prog.key == "zmd":
+        try:
+            # 入口唯一：实现只在 orchestrator/apps/zmd.py（docs/adr/0003）。
+            # apps.get 对未迁移的程序抛 KeyError 而不是回落 —— 回落会让人以为
+            # 改了专项模块，其实改的是共用文件。
+            return apps.get("zmd").zmd_run(state, args, f, log)
+        except GuardFailure as e:
+            log(f"\n  [!!] [{e.invariant}] {e.detail}")
+            return "failed", {"invariant": e.invariant}, \
+                f"{e.invariant}：{e.detail.splitlines()[0]}"
+
     # --- 8a + 8b（--only-locate 到此为止）---------------------------------
     # ⚠️ 两个程序的任务页**不同构**，定位链必须分派（FAULT #22）：
     #   ok-ww  -> 单行「每日任务」+ 行内扫描最右亮像素 = 开始按钮
@@ -903,12 +254,14 @@ def body(args, state, log):
     if args.only_locate:
         try:
             if prog.key == "nte":
-                f, _nav = nte_navigate_to_daily(state, f, args, log)
-                sp, loc = nte_locate_start_button(state, f, log, offline=args.offline)
+                nte_app = apps.get("nte")
+                f, _nav = nte_app.nte_navigate_to_daily(state, f, args, log)
+                sp, loc = nte_app.nte_locate_start_button(state, f, log, offline=args.offline)
                 y0 = y1 = 0
             else:
-                f, _nav = navigate_to_tasks(state, f, registry, args, log)
-                sp, y0, y1, loc = locate_and_click_start(state, f, registry, log)
+                ww_app = apps.get("ww")
+                f, _nav = ww_app.navigate_to_tasks(state, f, registry, args, log)
+                sp, y0, y1, loc = ww_app.locate_and_click_start(state, f, registry, log)
         except GuardFailure as e:
             log(f"\n  [!!] [{e.invariant}] {e.detail}")
             return "failed", {"invariant": e.invariant}, \
@@ -975,29 +328,36 @@ def body(args, state, log):
     #   ok-ww  -> 终止标记（FAULT #15：实测它写的是**逐字相同**的那句话）
     # ok-ww 侧不再依赖画面完成帧；抓帧仍保留，作为超时时落盘取证。
     if prog.key == "nte":
-        result, detail, frame_path = wait_for_nte_completion(
+        result, detail, frame_path = apps.get("nte").wait_for_nte_completion(
             state, args, log, window_log=prog_log_window)
     else:
-        result, detail, frame_path = wait_for_completion(
+        result, detail, frame_path = apps.get("ww").wait_for_completion(
             state, registry, args, log, window_log=prog_log_window)
-    log(f"\n[结果] {result}：{detail}")
-    state.set("result", result)
-    state.set("result_detail", detail)
+    # result -> 状态码的映射**只有一处**（finish()），zmd 与主流程共用，
+    # 避免两条路径的映射表日后各自漂移。
+    return finish(state, result, detail, frame_path, log)
 
-    # result -> 状态码。**"unknown" 映射为 "skipped" 是刻意的**：
-    # context.run_step 只把 "ok"/"skipped" 当非失败（退出码 0、链条继续）。
-    # unknown 时 ok-ww 与游戏都已经退出了，**节点 9 的清理无从下手**，
-    # 所以让链条正常走完（节点 9 会自己判定「无需清理」），
-    # 再由**人**看日志裁决 —— 而不是用退出码 3 把一个正常夜间流程标红。
-    status = {"completed": "ok", "timeout": "timeout", "failed": "failed",
-              "unknown": "skipped",
-              # FAULT #30：「停住了」不是超时 —— 它是**确定**的失败
-              # （执行器暂停、零进展），报 failed 让节点 9 走清理路径。
-              # 若报 timeout 会被当成「等太久」，归因错误。
-              "stalled": "failed"}.get(result, "failed")
-    return (status,
-            {"result": result, "detail": detail, "completion_frame": frame_path},
-            f"{result}：{detail}")
+
+# ---------------------------------------------------------------------------
+# 旧调用点垫片：实现已迁到 orchestrator/apps/<key>.py（docs/adr/0003），
+# probe/ 下的探针仍按 step8.<名字> 取用（同一个函数对象，不是副本）。
+# ---------------------------------------------------------------------------
+from ..apps.nte import (  # noqa: E402,F401
+    NTE_GAME_WAIT_SECONDS,
+    NTE_READABLE_SAMPLES,
+    NTE_SETTLE_POLL,
+    NTE_SETTLE_SECONDS,
+    NTE_STALL_GRACE_SECONDS,
+    nte_locate_start_button,
+    nte_navigate_to_daily,
+    nte_wait_game_settled,
+    wait_for_nte_completion,
+)
+from ..apps.ww import (  # noqa: E402,F401
+    locate_and_click_start,
+    navigate_to_tasks,
+    wait_for_completion,
+)
 
 
 if __name__ == "__main__":

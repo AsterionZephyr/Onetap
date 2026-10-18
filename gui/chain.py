@@ -33,7 +33,7 @@ STEPS_DIR = os.path.join(ROOT, "orchestrator", "steps")
 STEPS = [
     ("1", "提权检查",         "step1_check_admin",       "非管理员直接中止（INV-7）",        True),
     ("2", "启动目标程序",     "step2_launch",            "拉起第一层，它自行启动第二层",      True),
-    ("4", "等待第二层窗口",   "step4_wait_second_layer", "Qt 窗口持有者出现",                False),
+    ("4", "等待窗口出现",     "step4_wait_second_layer", "窗口持有者（ww/nte=第二层 Qt；zmd=单层）", False),
     ("5", "等待窗口就绪",     "step5_wait_ready",        "标题完整 + 尺寸达标 + 采样稳定",    False),
     ("6", "抓首帧并校验",     "step6_first_frame",       "INV-1/13/17/22 + 身份校验",        True),
     ("7", "置前台",           "step7_foreground",        "INV-8/22/23 的前置关",             False),

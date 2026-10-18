@@ -127,17 +127,18 @@ def find_window(program=None, require_ready=False):
     与既有调用方行为一致。
 
     三重排除（FAULT #12 逼出来的，缺一不可）：
-      1. 排除第一层的 Tauri 外壳（class `Tauri Window`）—— 它持有的是
-         启动器窗口，不是真正干活的 Qt 窗口。
-         实测本机 `Clash Verge` 也是这个类，故此排除是**载荷性**的。
+      1. **窗口类必须属于本程序**（Program.window_class_matches）。
+         ok-ww 的持有者实测恒为 `Qt6111QWindowIcon`、ok-nte 亦为 Qt 系；
+         两者的**第一层外壳**都是 `Tauri Window`，它持有的是启动器、不是
+         真正干活的界面（实测本机 `Clash Verge` 也是这个类）。
+         但这条判据**不能**写死成「排除 Tauri」：MaaEnd 的主窗口**就是**
+         Tauri Window（见 programs.ZMD 的注释）⇒ 写死会让它永远发现不了，
+         且只表现为超时。故改为按程序声明，逻辑在 programs.py。
       2. **排除自家进程的窗口**（本进程 + 父进程 PID）。本编排的 GUI 标题
          是「ok-ww 断点式编排 — GUI」，被裸正则 `OK-WW` 命中；ok-ww 退出后
          它会被误判为 ok-ww，而它**能成功抓帧**（不触发任何不变量）
-         ⇒ 静默把自己的控制面板当目标。
-      3. **窗口类必须是 Qt 系**。ok-ww 的持有者实测恒为
-         `Qt6111QWindowIcon`；ok-nte 亦为 Qt。不是 Qt 就一定不是目标。
-         注意：`require_ready=False`（第二层刚起、标题尚未成完整形态）时
-         也成立 —— 第二层一样是 Qt 窗口。
+         ⇒ 静默把自己的控制面板当目标。MaaEnd 侧同样如此：本会话 GUI 的
+         标题里就含 MaaEnd（FAULT #12 的翻版）。
 
     返回 None 表示**确实没找到**，绝不返回一个「像目标程序的别的东西」。
     """
@@ -145,9 +146,8 @@ def find_window(program=None, require_ready=False):
     pattern = prog.ready_title_re if require_ready else prog.loose_title_re
     self_pids = _self_pids()
     found = [w for w in win32.find_windows(pattern)
-             if w[3] != programs_mod.TAURI_CLASS
-             and w[1] not in self_pids
-             and w[3].startswith(programs_mod.QT_CLASS_PREFIX)]
+             if w[1] not in self_pids
+             and prog.window_class_matches(w[3])]
     if not found:
         return None
     hwnd, pid, title, cls = found[0]
@@ -209,15 +209,22 @@ def wait_for_second_layer(program=None, timeout=SECOND_LAYER_TIMEOUT, log=None):
     """
     prog = programs_mod.get(program)
     deadline = time.time() + timeout
+    # 单层程序（MaaEnd）：没有「外壳拉第二层」这一步，进程自己就持窗口。
+    # 这里只是把「等窗口出现」与「等第二层出现」合并成同一入口，
+    # 免得调用方为程序结构差异写分支。
+    single = not prog.has_second_layer
     while time.time() < deadline:
         info = find_window(prog)
-        if info and info["class"].startswith(programs_mod.QT_CLASS_PREFIX):
+        if info:
             if log:
-                log(f"  第二层窗口出现 hwnd={info['hwnd']} pid={info['pid']}")
+                kind = "窗口" if single else "第二层窗口"
+                log(f"  {kind}出现 hwnd={info['hwnd']} pid={info['pid']} "
+                    f"class={info['class']}")
             return info
         time.sleep(1.0)
+    what = "窗口" if single else "第二层 Qt 窗口"
     raise DiscoveryFailure(
-        f"等待 {timeout:.0f} 秒仍未出现第二层 Qt 窗口（{prog.display}）。\n"
+        f"等待 {timeout:.0f} 秒仍未出现{what}（{prog.display}）。\n"
         f"  当前 {prog.display} 进程：{running(prog) if log else '(略)'}")
 
 

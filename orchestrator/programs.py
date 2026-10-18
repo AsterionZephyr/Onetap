@@ -95,7 +95,9 @@ class Program:
 
     def __init__(self, key, display, exe, root_dir, process_prefix,
                  process_names, loose_title_re, ready_title_re,
-                 min_width, min_height, game_names=None, game_title_re=None):
+                 min_width, min_height, game_names=None, game_title_re=None,
+                 window_class=None, has_second_layer=True,
+                 second_layer_exe=None, logdir=None, log_glob="ok-script*.log"):
         self.key = key
         self.display = display
         self.exe = exe
@@ -115,6 +117,34 @@ class Program:
         # 游戏主窗口标题正则（关窗前定位窗口用；实测两者都可为空标题）
         self.game_title_re = game_title_re or ""
 
+        # --- 窗口类判据（接入第 3 个程序 MaaEnd 时补上）-------------------------
+        # 原先是 window.find_window 里写死的「必须 Qt 前缀」，因为当时两个程序
+        # （ok-ww / ok-nte）都持有 Qt 自绘窗口。**MaaEnd 不是**：它是 Tauri +
+        # WebView2，主窗口类恰好是 Tauri Window —— 而那正是 ok-ww/ok-nte
+        # **第一层外壳**用的类，也就是旧判据里的排除项。继续写死会得到
+        # 「永远找不到 MaaEnd 窗口」，且不报错（只表现为超时）。
+        # 故窗口类改为**按程序声明**：
+        #   window_class = None  -> 沿用 Qt 前缀（ok-ww / ok-nte，类名随 Qt 版本变）
+        #   window_class = '...' -> **精确相等**（MaaEnd）
+        self.window_class = window_class
+
+        # 是否有「第二层」（先起外壳、再由外壳拉起真正持窗口的进程）。
+        # ok-ww / ok-nte 都是两层（FAULT #34）；MaaEnd 是**单层**：
+        # MaaEnd.exe 自己持有主窗口，只是它会按需拉起 agent/go-service.exe、
+        # agent/cpp-algo.exe 两个子进程干活。故「等第二层」对它是空操作。
+        self.has_second_layer = has_second_layer
+
+        # 第二层可执行文件的**典型路径**：只用于自检（证明 process_prefix 覆盖它），
+        # 不参与运行时判定。缺省按 ok-ww/ok-nte 的结构推。
+        self.second_layer_exe = second_layer_exe or os.path.join(
+            root_dir, "data", "apps", "ok-" + key, "python", "pythonw.exe")
+
+        # 运行日志：目录 + 文件名通配，判据层（verdict.py）按它定位日志。
+        # ok-ww/ok-nte 在 <root>/data/apps/ok-<key>/working/logs 下的 ok-script*.log；
+        # MaaEnd 在 <root>/debug 下的 mxu-tauri.log。
+        self.logdir = logdir
+        self.log_glob = log_glob
+
     def owns_process(self, exe_path):
         """该进程是否属于本程序。
 
@@ -132,6 +162,26 @@ class Program:
             return False
         p = os.path.normcase(os.path.abspath(exe_path))
         return p.startswith(self.process_prefix) or p == self.first_layer_exe
+
+    def window_class_matches(self, cls):
+        """窗口类是否是**本程序**的窗口持有者（FAULT #12 的第 3 条闸门）。
+
+        历史：这条判据原本写死在 window.find_window 里，形式是
+        「不是 Tauri Window 且以 Qt 开头」。接入 MaaEnd 时它同时失效两次：
+        MaaEnd 的主窗口**就是** Tauri Window（被第 1 条排除），
+        且**不是** Qt（被第 2 条排除）⇒ 永远发现不了窗口，只表现为超时。
+        故改为按程序声明，逻辑留在本表、window.py 只调用。
+
+        window_class=None 时按 Qt 前缀匹配（兼容 Qt 版本号变化，INV-5 同理）。
+        """
+        if not cls:
+            return False
+        if self.window_class is None:
+            return cls.startswith(QT_CLASS_PREFIX)
+        want = self.window_class
+        if isinstance(want, (list, tuple, set)):
+            return cls in want
+        return cls == want
 
     def title_matches(self, title, ready=False):
         """标题是否像本程序。ready=True 时要求完整形态（含版本号）。
@@ -210,7 +260,55 @@ NTE = Program(
 )
 
 
-ALL = [WW, NTE]
+# --- MaaEnd（zmd）----------------------------------------------------------
+# 第 3 个目标程序。**与上面两个的结构完全不同**，三条差异都会引起静默失效，
+# 故逐条写明依据（实测 2026-10-18，提权会话，屏幕 2560x1440）：
+#
+# 1. **单层**（has_second_layer=False）。ok-ww/ok-nte 是「外壳 exe + data/apps 下的
+#    第二层」，MaaEnd 自己就是窗口持有者：
+#         hwnd=202134 pid=19952 cls='Tauri Window' title='MaaEnd v2.34.0-beta.1'
+#    另有 agent/go-service.exe、agent/cpp-algo.exe 两个**子进程**（干活用，不持主窗口），
+#    它们都在 <root>\agent\ 下，故被 process_prefix 覆盖。
+# 2. **窗口类是 Tauri Window**，而非 Qt —— 见 window_class 字段的注释。
+#    ⚠️ 顺带一提：本编排自己的 GUI（Chrome_WidgetWin_1，标题里也含 MaaEnd）
+#    会被 loose_title_re 命中，这正是 FAULT #12 的翻版；靠 window_class +
+#    pid 不在自家 PID 集合里这两道闸排除。
+# 3. **进程归属用同一个前缀**：<root> == process_prefix。本机实测 zmd 目录下
+#    只有 MaaEnd 一个属主进程，agent 子进程在其下；WebView2 的
+#    msedgewebview2.exe 在 Program Files 下（**不能**纳进来，那会误杀本机
+#    其它 Chromium 应用）。
+#
+# 最小化样本（本次实测）：rect=(-32000,-32000) 160x28、iconic=True
+# —— 与 ok-ww 的 -32000 哨兵一致，restore 由 window/win32 统一处理。
+#
+# 日志：<root>\debug\mxu-tauri.log（Rust 后端，**跨启动追加**）。
+# 另外两个日志每次启动都会被清空，不能当判据 —— 见 verdict.py 的 zmd 段。
+ZMD = Program(
+    key="zmd",
+    display="MaaEnd",
+    exe=r"E:\TOOLS\ScriptsGames\zmd\MaaEnd.exe",
+    root_dir=r"E:\TOOLS\ScriptsGames\zmd",
+    # 单层程序：目录前缀即归属判据（第二层不存在，故与 root_dir 相同）
+    process_prefix=r"E:\TOOLS\ScriptsGames\zmd",
+    process_names=["MaaEnd.exe", "go-service.exe", "cpp-algo.exe"],
+    loose_title_re=r"(?i)MaaEnd",
+    # 完整形态实测：MaaEnd v2.34.0-beta.1（含预发布后缀，故 [\d.]+ 后允许 -xxx）
+    ready_title_re=r"(?i)MaaEnd\s+v[\d.]+",
+    # 实测恢复后窗口 1201x826（client 1186x817）
+    min_width=1000,
+    min_height=700,
+    # 目标游戏：终末地。**权威口径来自 MaaEnd 自己的应用日志**：
+    #     [MAA] 搜索桌面窗口, classRegex: UnityWndClass , windowRegex: Endfield
+    game_names=["Endfield.exe"],
+    game_title_re=r"(?i)Endfield",
+    window_class="Tauri Window",
+    has_second_layer=False,
+    second_layer_exe=r"E:\TOOLS\ScriptsGames\zmd\agent\go-service.exe",
+    logdir=r"E:\TOOLS\ScriptsGames\zmd\debug",
+    log_glob="mxu-tauri.log",
+)
+
+ALL = [WW, NTE, ZMD]
 BY_KEY = {p.key: p for p in ALL}
 
 # 默认程序：**保持 ok-ww**，使既有调用方行为不变（本次改动不加回归）。
@@ -228,6 +326,13 @@ _TITLE_CASES = [
     (WW,  "ok-ww 断点式编排 — GUI",              True,  False),  # FAULT #12 的自家标题
     (NTE, "ok-nte",                           True,  False),
     (NTE, "ok-nte v1.4.14 China  - ok-nte",   True,  True),
+    # MaaEnd：完整形态实测为预发布版号
+    (ZMD, "MaaEnd",                           True,  False),
+    (ZMD, "MaaEnd v2.34.0-beta.1",            True,  True),
+    # FAULT #12 翻版：本编排 GUI 的标题里也含 MaaEnd（类 Chrome_WidgetWin_1）。
+    # 标题闸只能放行它，真正的排除靠 window_class + 自家 PID —— 这里显式登记，
+    # 免得后人以为「标题判据够用」。
+    (ZMD, "编写MaaEnd GUI节点并运行 — DeepSeek Harness", True, False),
 ]
 
 
@@ -250,8 +355,10 @@ def _ownership_problems():
                 f"{prog.display} 归属判据认不出**第一层** {prog.exe!r} "
                 f"（process_prefix={prog.process_prefix!r}）"
                 f" —— 残留的第一层会不可见且杀不掉（FAULT #34）")
-        second = os.path.join(prog.root_dir, "data", "apps",
-                              "ok-" + prog.key, "python", "pythonw.exe")
+        # 第二层路径**按程序给出**（Program.second_layer_exe）：
+        # ok-ww/ok-nte 是 data/apps/ok-<key>/python/pythonw.exe，
+        # MaaEnd 是单层程序，取它的 agent 子进程作为「第二层」样本。
+        second = prog.second_layer_exe
         if not prog.owns_process(second):
             problems.append(
                 f"{prog.display} 归属判据认不出**第二层** {second!r}"

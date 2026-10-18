@@ -19,7 +19,7 @@ ok-ww 是两层：第一层 `ok-ww.exe`（Tauri 外壳）拉起第二层 `python
     python -m orchestrator.steps.step4_wait_second_layer --adopt-hwnd 8196624
 """
 
-import time
+import os
 
 from .. import window
 from ..errors import DiscoveryFailure
@@ -46,8 +46,15 @@ def body(args, state, log):
             f"{info['width']}x{info['height']}")
         return "ok", {"hwnd": args.adopt_hwnd, "adopted": True}, "手工指定 hwnd"
 
-    log(f"  等待 {prog.display} 第二层 Qt 窗口（最多 {args.timeout:.0f}s）")
-    log(f"  {prog.display} 第一层会自行放行；本框架**不点击任何东西**")
+    # ⚠️ 措辞按程序区分：MaaEnd 是**单层**（MaaEnd.exe 自己持窗口，
+    # 没有第二层），把「等待第二层 Qt 窗口」这句话用在一个 Tauri 单层程序上，
+    # 出问题时会把人引去找一个**不存在**的第二层。
+    what = "第二层 Qt 窗口" if prog.has_second_layer else "窗口"
+    log(f"  等待 {prog.display} {what}（最多 {args.timeout:.0f}s）")
+    if prog.has_second_layer:
+        log(f"  {prog.display} 第一层会自行放行；本框架**不点击任何东西**")
+    else:
+        log(f"  {prog.display} 是单层程序（{os.path.basename(prog.exe)} 自己持窗口）")
     try:
         info = window.wait_for_second_layer(prog, timeout=args.timeout, log=log)
     except DiscoveryFailure as e:
@@ -56,8 +63,8 @@ def body(args, state, log):
         alive = window.running(prog)
         if not alive:
             return ("failed", {"hwnd": None},
-                    f"没有 {prog.display} 进程在跑 —— 第二层不可能出现")
-        return "failed", {"hwnd": None}, "第二层未在超时内出现"
+                    f"没有 {prog.display} 进程在跑 —— {what}不可能出现")
+        return "failed", {"hwnd": None}, f"{what}未在超时内出现"
 
     state.set("hwnd", info["hwnd"])
     state.set("pid", info["pid"])
@@ -66,7 +73,7 @@ def body(args, state, log):
     return ("ok",
             {"hwnd": info["hwnd"], "pid": info["pid"], "class": info["class"],
              "title": info["title"]},
-            f"第二层就绪 hwnd={info['hwnd']}")
+            f"{what}就绪 hwnd={info['hwnd']}")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,10 @@ import os
 FALLBACK = [
     ("ww", "ok-ww"),
     ("nte", "ok-nte"),
+    # MaaEnd（zmd）是**单层 + Tauri 窗口 + 日志判据**的第三个程序，
+    # 与前两个结构不同，见 programs.ZMD 的注释。这里同步是为了让 GUI
+    # 在 programs.py 读不出来时仍能列出它（verify() 只在漂移时告警）。
+    ("zmd", "MaaEnd"),
 ]
 
 PROGRAMS_PY = os.path.join(
