@@ -277,7 +277,11 @@ class RunState:
             try:
                 os.replace(tmp, self.path)
                 return
-            except PermissionError:
+            except OSError as e:
+                # 5 = ERROR_ACCESS_DENIED（目标被只读打开，最常见）
+                # 32 = ERROR_SHARING_VIOLATION（对方要求独占）—— 同一类冲突，一起重试
+                if getattr(e, "winerror", None) not in (5, 32):
+                    raise
                 if attempt == self.SAVE_RETRIES - 1:
                     raise
                 time.sleep(delay)
