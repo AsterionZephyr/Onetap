@@ -150,4 +150,5 @@
 3. `probe/apps_shims_selfcheck.py`（垫片必须仍是**同一对象**）
 4. `python -m compileall -q orchestrator` + `python -m pyflakes orchestrator`（undefined name 为 0）
 5. `step8 --target zmd --offline --adopt-frame logs/probe/zmd_full.png --only-locate`
-6. 有程序的机器上：`--target <key> --dry-run`（ww/nte/zmd 各自一次）
+6. `probe/activate_selfcheck.py`（改 `input`/`win32` 时必跑：置前台兜底点击的落点验证，FAULT #36）
+7. 有程序的机器上：`--target <key> --dry-run`（ww/nte/zmd 各自一次）

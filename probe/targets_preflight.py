@@ -80,9 +80,11 @@ def main(argv=None):
 
         w = window.find_window(prog)
         if w:
-            r = w.get("rect") or {}
-            print(f"[---] 已有窗口  hwnd={w['hwnd']} title={w['title']!r} "
-                  f"{r.get('width')}x{r.get('height')}")
+            # find_window 只返回 hwnd/pid/title/class（没有 rect）——
+            # 想打尺寸得另外问 win32.window_state，别去 w["rect"] 里取（会静默得到 None）
+            r = win32.window_state(w["hwnd"])["rect"]
+            print(f"[---] 已有窗口  hwnd={w['hwnd']} class={w['class']!r} "
+                  f"title={w['title']!r} {r['width']}x{r['height']}")
         else:
             print("[---] 暂无窗口")
 

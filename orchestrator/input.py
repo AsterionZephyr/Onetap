@@ -25,6 +25,44 @@ FOREGROUND_TRIES = 10        # 抢前台的尝试次数
 FOREGROUND_INTERVAL = 0.4    # 每次间隔（秒）
 
 
+ACTIVATE_INSET = 6           # 候选点离窗口边缘的最小距离（像素）
+ACTIVATE_GRID_X = 5          # 候选网格列数
+ACTIVATE_GRID_Y = 4          # 候选网格行数
+
+
+def _activation_candidates(st):
+    """给「真实点击夺取激活」生成候选屏幕坐标，**首选点在最前**。
+
+    首选点 = 窗口体左 1/5、顶部 18px（标题栏区域），理由见 `_click_to_activate`。
+    之后是 5×4 网格 + 四条窄边带，用于**绕开遮挡** —— 实测（2026-10-19 03:2x）
+    MaaEnd 被它自己拉起的「鹰角启动器」盖住 95%，只剩右侧 24px、底部 87px 的缝，
+    固定点数在左上角 ⇒ 点进了启动器，激活永远拿不到。
+    """
+    left, top, w, h = st["left"], st["top"], st["width"], st["height"]
+    pts = [(left + max(20, w // 5), top + min(18, h // 8))]
+    inset = ACTIVATE_INSET
+    xs = [left + inset + (w - 2 * inset) * i // (ACTIVATE_GRID_X - 1)
+          for i in range(ACTIVATE_GRID_X)]
+    ys = [top + inset + (h - 2 * inset) * j // (ACTIVATE_GRID_Y - 1)
+          for j in range(ACTIVATE_GRID_Y)]
+    for y in ys:
+        for x in xs:
+            pts.append((x, y))
+    # 窄边带（遮挡窗口几乎盖满时唯一能点的去处）
+    for y in ys + [top + h - inset, top + h // 2]:
+        pts.append((left + w - inset, y))
+        pts.append((left + inset, y))
+    for x in xs:
+        pts.append((x, top + h - inset))
+    seen = set()
+    out = []
+    for p in pts:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 def _click_to_activate(hwnd, log=None):
     """最后一手：**在目标窗口体上真实点击一次**，用系统认可的用户输入夺取前台。
 
@@ -34,32 +72,79 @@ def _click_to_activate(hwnd, log=None):
     但**真实鼠标点击目标窗口体一次**即可立即夺回，且随后 `ensure_foreground`
     立即通过（实测 3/3）。
 
-    HANDOFF §2.2 第 5 条早就写了「窗口拉不到前台时，**真实鼠标点击窗口体**
-    能拿到激活」—— 但 `ensure_foreground` 此前**从未实现这一手**，于是节点 7
-    直接以 INV-8 失败并**中断整条链**。
+    ⚠️ FAULT #36（实测 2026-10-19 03:20，MaaEnd）：「点目标窗口体」不等于
+    「点哪个点都行」。MaaEnd 跑完后它自己拉起的**鹰角启动器**（Qt，
+    `Qt5158QWindowIcon`）跳到前台，盖住 MaaEnd 约 95%（启动器 1312×754 在
+    (624,323)，MaaEnd 1201×826 在 (759,338)），且该启动器**线程不响应**
+    ⇒ `SetForegroundWindow` 从此**永久失败**（不是「等 10 秒就好」，重跑两次都败）。
+    此时固定点（左上 1/5、顶部 18px）**正落在启动器上**：真实点击把激活交给了
+    启动器，MaaEnd 一次也没拿到前台，框架报 INV-8 —— 而 INV-23 的本意正是
+    「不许点到别的程序上」。修法三步：
+      1. `win32.raise_window(hwnd)` 先把目标抬到 Z 序最上层（不改焦点）；
+      2. 候选点按 `top_window_at(x,y) == hwnd` **逐个验证**，跳过被遮挡的点；
+      3. 一个都验不过 ⇒ **不点**（点了就是操作别的程序），如实报遮挡者。
 
-    点哪里：窗口**顶部**（标题栏区域）横坐标偏左 1/5 处。理由：
+    点哪里（首选点）：窗口**顶部**（标题栏区域）横坐标偏左 1/5 处。理由：
       · 避开右上角的最小化/最大化/关闭按钮；
       · 避开窗口主体里可能存在的可交互控件（点击它会产生副作用）；
       · 标题栏拖动需要按下+移动，单纯单击不会拖动窗口。
-    仅当该点确实落在窗口 rect 内时才点。
+    首选点验不过时退到 `_activation_candidates` 的网格与窄边带。
     """
     st = win32.window_state(hwnd)
     if st is None:
         return False
     if st["width"] < 100 or st["height"] < 40:
         return False
-    x = st["left"] + max(20, st["width"] // 5)
-    y = st["top"] + min(18, st["height"] // 8)
-    if log:
-        log(f"  置前台 API 全部失效 —— 改用在窗口体上真实点击 ({x},{y}) 夺取激活")
-    try:
-        win32.click(x, y)
-    except Exception:                                     # noqa: BLE001
-        return False
-    time.sleep(0.6)
-    st2 = win32.window_state(hwnd)
-    return bool(st2 and st2["foreground"])
+
+    if win32.raise_window(hwnd):
+        time.sleep(0.15)
+        st = win32.window_state(hwnd) or st
+
+    sw, sh = win32.screen_size()
+    cover = None
+    for x, y in _activation_candidates(st):
+        if not (0 <= x < sw and 0 <= y < sh):
+            continue
+        top_win = win32.top_window_at(x, y)
+        if top_win != hwnd:
+            if cover is None:
+                cover = (top_win, x, y)
+            continue
+        if log:
+            log(f"  置前台 API 全部失效 —— 改用在窗口体上真实点击 ({x},{y}) 夺取激活")
+        try:
+            win32.click(x, y)
+        except Exception:                                 # noqa: BLE001
+            return False
+        time.sleep(0.6)
+        st2 = win32.window_state(hwnd)
+        return bool(st2 and st2["foreground"])
+
+    if log and cover:
+        log(f"  ⚠ 目标窗口整块被其他窗口遮挡（{cover[0]} 在 ({cover[1]},{cover[2]})），"
+            f"不做点击 —— 点了就是操作别的程序（INV-23）")
+    return False
+
+
+def covering_window(hwnd):
+    """目标窗口当前是否被**别的顶层窗口**遮住；是则返回 (hwnd, 标题) 供报错用。
+
+    只用于诊断信息：探测目标 rect 的 5 个代表点，返回第一个不属于目标的顶层窗口。
+    """
+    st = win32.window_state(hwnd)
+    if st is None:
+        return None
+    left, top, w, h = st["left"], st["top"], st["width"], st["height"]
+    probes = [(left + w // 2, top + h // 2),
+              (left + max(20, w // 5), top + min(18, h // 8)),
+              (left + w - ACTIVATE_INSET, top + h // 2),
+              (left + w // 2, top + h - ACTIVATE_INSET),
+              (left + ACTIVATE_INSET, top + ACTIVATE_INSET)]
+    for x, y in probes:
+        other = win32.top_window_at(x, y)
+        if other and other != hwnd:
+            return other, win32.get_window_text(other)
+    return None
 
 
 def ensure_foreground(hwnd, tries=FOREGROUND_TRIES, interval=FOREGROUND_INTERVAL,
@@ -115,11 +200,16 @@ def ensure_foreground(hwnd, tries=FOREGROUND_TRIES, interval=FOREGROUND_INTERVAL
                 log("  置前台成功（改用真实点击夺取激活）")
             return st
 
+    cover = covering_window(hwnd)
+    if cover:
+        extra = (f"；目标窗口当前被别的窗口遮挡：hwnd={cover[0]} 标题={cover[1]!r} "
+                 f"—— 先关掉/最小化它（INV-23 不允许点别的程序）")
+    else:
+        extra = "；目标窗口未被遮挡，可能是别的程序正持有前台且不响应"
     raise GuardFailure(
         "INV-8",
         f"连续 {tries} 次未能把目标程序置前台，且真实点击窗口体也未能夺取激活 —— "
-        f"真实光标点击会落到别处，且它会静默挂起。"
-        f"请让开鼠标或关闭遮挡窗口后重试")
+        f"真实光标点击会落到别处，且它会静默挂起{extra}")
 
 
 def assert_top_window(hwnd, screen_x, screen_y):

@@ -25,6 +25,12 @@ DIB_RGB_COLORS = 0
 
 SW_RESTORE = 9
 
+# SetWindowPos 的抬升参数：只改 Z 序，不移动/不缩放/不激活
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
+HWND_TOP = 0
+
 GA_ROOT = 2
 
 # ALT 虚拟键：用于「抖一下」以解除前台锁（FAULT #29）
@@ -254,6 +260,19 @@ def is_iconic_sentinel(left, top):
 def restore_window(hwnd):
     """ShowWindow(SW_RESTORE)。返回后**必须**由调用方校验 rect（INV-22）。"""
     return bool(user32.ShowWindow(hwnd, SW_RESTORE))
+
+
+def raise_window(hwnd):
+    """把窗口抬到 Z 序最上层（**不激活、不移动、不缩放**）。
+
+    用途：目标窗口被**别的程序的窗口**挡住时，先把它抬上来，让
+    `top_window_at` 在目标坐标处真的返回目标窗口，随后「真实点击夺取激活」
+    才可能生效（INV-23 与 FAULT #35 的交集，见 input._click_to_activate）。
+
+    只改 Z 序，不改别的程序的任何状态，也不改变焦点。
+    """
+    return bool(user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE))
 
 
 def _alt_nudge():
