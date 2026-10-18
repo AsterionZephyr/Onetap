@@ -255,12 +255,33 @@ class RunState:
         self.save()
         return rel
 
+    # ⚠️ **FAULT #37（实测 2026-10-18）**：Windows 上「写 tmp + `os.replace`」与
+    #    「别处只读打开同一文件」是**互斥**的 —— CPython 的 `open()` 只共享
+    #    READ|WRITE、**不共享 DELETE**，于是 `MoveFileExW` 返回
+    #    `ERROR_ACCESS_DENIED`(5)。GUI 每 120ms 读一次 `state.json`
+    #    （`gui/runner.py::StateWatcher`），撞车率实测 **7.8%**
+    #    （`probe/_probe_state_race.py`：10233 次替换失败 794 次，错误码全是 5）。
+    #    真实后果：节点 6 抓完首帧写 `add_shot` 时抛 PermissionError → 整节点 FAILED
+    #    （run-20261018-131146）。
+    #    ⇒ 替换**必须重试**。读侧单次持锁约 10ms，退避 12 次（合计 >0.6s）足够。
+    SAVE_RETRIES = 12
+    SAVE_BACKOFF_S = 0.01
+
     def save(self):
         os.makedirs(self.run_dir, exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.raw, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self.path)
+        delay = self.SAVE_BACKOFF_S
+        for attempt in range(self.SAVE_RETRIES):
+            try:
+                os.replace(tmp, self.path)
+                return
+            except PermissionError:
+                if attempt == self.SAVE_RETRIES - 1:
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, 0.2)
 
     # --- 链条健康度 ---------------------------------------------------
 

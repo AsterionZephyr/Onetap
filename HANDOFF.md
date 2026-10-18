@@ -488,6 +488,16 @@ for target in 配置的顺序:
    诊断特征（这次逐条对上）：进程存活但 **CPU 仅 0.0x 秒**、**RSS 只有 ~19 MB**
    （连 numpy 都没 import）、线程 `WaitReason=Executive`、父子两进程栈顶同为 `write`。
    ⇒ 长跑一律 `stdout=open(输出文件, "w")`，或起 reader 线程把管道抽干。
+9. **Windows 上「原子替换」与「有别的进程在读」是互斥的（FAULT #37，2026-10-18 实测）。**
+   `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` 遇到目标文件正被打开（**只读打开也算**）
+   就返回 `ERROR_ACCESS_DENIED`(5) —— CPython 的 `open()` 只共享 READ|WRITE，
+   **不共享 DELETE**。表现为节点里 `os.replace('...state.json.tmp','...state.json')`
+   抛 `PermissionError: [WinError 5] 拒绝访问`，整节点 FAILED。
+   撞车对象就是 **GUI 每 120 ms 读一次 `state.json`** 的那个轮询；实测撞车率
+   **6.9%~7.8%**（`probe/_probe_state_race.py`：8840 次替换失败 613 次，同一夹具换成
+   重试实现后 **0/8060**）。
+   ⇒ **凡是「写 tmp + `os.replace`」的目标文件可能被别的进程读，就必须重试**
+   （读侧单次持锁约 10 ms；本仓库用 12 次退避，合计 >0.6 s）。
 
 ---
 
@@ -507,6 +517,7 @@ for target in 配置的顺序:
 | **`probe/_probe_foreground_click.py`** | **抢前台的最后一手**回归（FAULT #35：游戏窗口占前台时 API 全败，必须真实点击窗口体）。静态 AST 接线 + 打桩语义 + 只读几何，**不依赖 live 复现**（该病态状态偶发、事后无法按需重建） |
 | **`probe/_probe_executor_pause.py`** | **执行器暂停**诊断（FAULT #30：`pos_invalid: (-32000, -32000)` 哨兵坐标）。含 `ok-script.2026-10-12.log` 作**负向**用例 |
 | **`probe/_probe_stalled_live.py`** | **FAULT #30 的 STALLED 分支——真实卡死驱动**。**2026-10-18 已跑通（闭环）**：等业务行 → `ShowWindow(SW_MINIMIZE)` 返回 True → 哨兵 `og.executor.pause pos_invalid:(-32000,-32000)` → 节点 8 用时 135.8s 判 `failed` / `data.result='stalled'` → `state.result='stalled'`、主控退出码 3，即「STALLED 映射 failed 而非 timeout」成立。证据 `logs/runs/stalled-live-20261018-061325`。⚠️ 用法上踩过 FAULT #36（见 §10 第 8 条）：主控 stdout 必须落**文件**，不能挂**不读的 PIPE** |
+| **`probe/_probe_state_race.py`** | **`state.json` 原子替换 vs 读轮询的撞车率**（FAULT #37：Windows 下目标文件被读打开时 `os.replace` 报 WinError 5）。两种跑法：裸 `os.replace` 测率（实测 **7.8%**）、`--verify-fix` 走**真实 `RunState.save()`**（带 `--raw` 作负向对照，应如实复现；不带则必须 0 失败） |
 | **`legacy/probe-investigation/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
 | **`legacy/probe-investigation/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
 | **`probe/nte_main.py`** | `all_hits` **唯一性检查工具**（被多个脚本复用） |
