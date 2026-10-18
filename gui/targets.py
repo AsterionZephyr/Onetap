@@ -23,13 +23,15 @@ import ast
 import os
 
 #: 兜底清单（磁盘解析失败时用）。顺序 = 默认执行顺序。
+# ⚠️ 顺序必须与 programs.ALL 一致（那里 MaaEnd 排在**第一位**：
+# 用户裁定「串联时 MaaEnd 必须先跑」）。GUI 的多选按这里的顺序拼 --target，
+# 顺序错 = 界面上看着一样、实际执行顺序变了。
 FALLBACK = [
+    # MaaEnd（zmd）是**单层 + Tauri 窗口 + 日志判据**的第三个程序，
+    # 与前两个结构不同，见 programs.ZMD 的注释。
+    ("zmd", "MaaEnd"),
     ("ww", "ok-ww"),
     ("nte", "ok-nte"),
-    # MaaEnd（zmd）是**单层 + Tauri 窗口 + 日志判据**的第三个程序，
-    # 与前两个结构不同，见 programs.ZMD 的注释。这里同步是为了让 GUI
-    # 在 programs.py 读不出来时仍能列出它（verify() 只在漂移时告警）。
-    ("zmd", "MaaEnd"),
 ]
 
 PROGRAMS_PY = os.path.join(

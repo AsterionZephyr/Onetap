@@ -32,6 +32,9 @@
 ## 动手前
 
 0. **三个目标程序都已接入同一条九节点链**（`--target ww|nte|zmd`，`orchestrator/programs.py:ALL` 是唯一来源）。
+   ⚠️ **串联执行顺序 = `ALL` 的声明顺序 = MaaEnd → ok-ww → ok-nte**（用户裁定）：MaaEnd 必须排第一，
+   它出问题不影响后面两个应用（`run_multi` 任一轮失败仍继续下一轮）。加新程序**追加在末尾**，
+   `targets.self_check()` 有一条断言守着「第一个必须是 zmd」。
    差异一览见 `FRAMEWORK.md` §0.1；加第 N 个程序 = 加一条 `Program`（`programs.py`）+ 一个
    `orchestrator/apps/<key>.py`（定位/判据/节点 8），再在 `step8` 的 `body()` 里分派一次。
    ⚠️ **MaaEnd 是单层程序**（`MaaEnd.exe` 自己持窗口，`class='Tauri Window'` 精确相等），

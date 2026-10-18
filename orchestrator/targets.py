@@ -16,7 +16,8 @@
 （加应用 = 在那边加一条 `Program`），顺序 = `ALL` 的声明顺序。
 本模块只负责三件事：
 
-  1. **顺序**：`keys()` 就是默认执行顺序（`both` 的历史语义 = 先 ww 后 nte）
+  1. **顺序**：`keys()` 就是默认执行顺序 = `ALL` 的声明顺序 = **MaaEnd → ok-ww → ok-nte**
+     （2026-10-19 用户裁定：串联时 MaaEnd 必须排第一，它出问题不影响下一个应用）
   2. **解析**：接受 `ww` / `nte` / `ww,nte` / `nte,ww` / `all` / `both`
   3. **报错**：未知 key **响亮失败**，绝不静默回落默认程序
 
@@ -26,7 +27,7 @@
     ww                -> [ww]
     nte               -> [nte]
     ww,nte / nte,ww   -> 按**书写顺序**跑（不是 ALL 顺序！用户可能想先跑 nte）
-    all / both        -> 全部（按 ALL 顺序）；`both` 是历史写法，永久保留
+    all / both        -> 全部（按 ALL 顺序 = MaaEnd, ok-ww, ok-nte）；`both` 是历史写法，永久保留
     重复项            -> 去重，保留首次出现的位置
     空串 / 全逗号     -> TargetError
     未知 key          -> TargetError，错误信息里列出全部已知 key
@@ -179,6 +180,11 @@ def self_check():
             continue
         if got != want:
             problems.append(f"parse({spec!r}) -> {got}，应为 {want}")
+
+    # 用户裁定（2026-10-19）：串联默认顺序的第一个必须是 MaaEnd。
+    # 这不是审美 —— 它最可能失败，排在后面会把前两个程序的成果和机器状态一起赔进去。
+    if ks and ks[0] != "zmd":
+        problems.append(f"默认串联顺序的第一个不是 MaaEnd（zmd）：{ks}")
 
     bad = ["nope", "ww,nope", "all,ww"]
     for spec in bad:
