@@ -1570,6 +1570,72 @@ MaaEnd 当时未运行（用户已关），框架自行拉起：节点 2（0.9s�
 ⇒ 回归面：更新闸门在**没有更新**的常态下零副作用（多读一次日志 + 一次绿块连通域扫描）。
 **尚未实测的是「真更新」（下载/安装/重启/弹窗全流程）**——那只能等 MaaEnd 下次自己发版时撞上。
 
+### 5.13 实测：三程序串联第二次全绿（2026-10-20 04:00，含自我更新闸门首个正式轮）
+
+**结论：`--target zmd,ww,nte` 一次跑完三程序，三轮全部通过，`CHAIN_EXIT=0`。自我更新闸门在
+「MaaEnd 已是最新版、无弹窗」的常态下零副作用（节点 5 判 idle 后 2.8s 放行）。
+ok-ww 运行期成片出现 `INV-13 全黑帧`，是不变量在正确拒答（游戏全屏加载），不是抓图故障。**
+
+命令与目录：
+
+```
+D:\WORKs\Anaconda\python.exe -X utf8 -m orchestrator.steps.main --target zmd,ww,nte
+run-dir  logs/runs/run-20261020-040015    04:00:15 起，约 29 分钟，CHAIN_EXIT=0
+```
+
+| 轮 | 程序 | 退出码 | 用时 | 节点 8 | 关键证据 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | MaaEnd | 0 | 14.5 分钟（871s） | **864.9s** | 04:00:52 接单 **13** task_ids → 04:14:39 `[MXU_KILLPROC] taskkill succeeded: Endfield.exe pid 4444` → 04:14:42 `stop_agent_impl`（终止标记 2 条） |
+| 2 | ok-ww | 0 | 4.8 分钟（289s） | **233.2s** | 终止标记=True 日常结束=True 杀游戏=False，阶段痕迹 24 条 |
+| 3 | ok-nte | 0 | 9.7 分钟（581s） | **503.5s** | success=['一咖舍','影院约会','异象家具','羁遇赠礼'] failed=['日常领取','喷泉签到'] skipped=['异象界域','异象追猎']，终止标记=True |
+
+#### 第 1 轮（MaaEnd）：这次是 13 个 task_ids
+
+任务清单比 10-17 那轮多了两条（`DijiangRewards`、`CreditShoppingMain`），且**有两条
+`MXU_KILLPROC`**（用户侧配置）：
+
+```
+VisitFriendsMain → DijiangRewards → CreditShoppingMain → DeliveryJobsMain
+→ OutpostTradingSchedule → AutoStockpileMain → AutoSellMain → ProtocolSpaceSchedule
+→ AutoEssenceSchedule → DailyRewardStart → AutoEcoFarmTask → MXU_KILLPROC → MXU_KILLPROC
+```
+
+节点时序：1/2（**已在运行→跳过**）/4（0.6s 复用 hwnd=2754478）/5（2.8s 1201×826，
+**更新闸门判 idle 立即放行**）/6（1.6s 身份 1.0000，`开始任务` 未被遮罩压暗 ⇒ 未触发 dismiss）
+/7（0.7s）/8（864.9s）/9（0.2s，正常完成不杀）。
+
+对照 §5.11/§5.12：MaaEnd 节点 8 已实测 **518 / 528 / 647.6 / 864.9 / 1168.5s** 五档 ⇒
+`ZMD_TIMEOUT` 兜底 1800s 依然不可下调。
+
+#### 第 2 轮（ok-ww）：`INV-13` 全黑帧成片出现（正确行为）
+
+节点 5 先看到 `500x500 标题=[OK-WW]`（窗口刚出现）随后 1458×924 就绪。节点 8 的等待期里，
+**0～152s 连续 68 次** `[INV-13] 本轮抓帧失败：帧几乎全黑（均值 RGB (0,0,0) → (1,1,1)）`，
+152s 后画面指纹恢复成 98～113 并照常跑到 233.2s 的终止标记。
+
+原因：ok-ww 开跑后**游戏占满屏幕**，`capture` 抓到的是游戏像素；加载阶段就是纯黑。
+**这是不变量在正确工作**（拒答黑帧，而不是分析它），框架的完成判定本来就只看日志。
+已写进 `HANDOFF.md` §7「已知非问题」：只有**点击前**抓帧全黑才需要停手。
+
+#### 第 3 轮（ok-nte）：与历史一致的两项子任务失败
+
+`failed=['日常领取','喷泉签到']` 是 ok-nte 侧的子任务失败，**不影响完成判定**（终止标记与
+「日常结束」都拿到了）。历史轮次里 `日常领取` 也失败过，属目标程序自身行为。
+
+#### 残留（Q3 正常完成不主动杀）
+
+```
+MaaEnd   程序 0 个 []  游戏 0 个 []
+ok-ww    程序 0 个 []  游戏 0 个 []
+ok-nte   程序 0 个 []  游戏 1 个 [('NTEGame.exe', 30164)]
+```
+
+MaaEnd 这一轮**自己退出了**：应用日志 `2026-10-20-1.log` 停在 04:14:42，`mxu-tauri.log`
+末行是 04:14:58 的 `[telemetry] 已结束 Session 并 flush`，进程随后消失（04:14:47 还有
+`Agent process #0 did not exit in time, killing it...`）。注意 §5.11 那轮它跑完是**留在运行的**，
+说明「跑完是否退出」也不稳定，**任何依赖「进程还在」的判据都不可靠**（现有判据本来就只看日志）。
+NTEGame.exe 30164 存活属 Q3。
+
 ### 出口条件
 
 本文件全部 `[待验证]` 项转为「已证实」或「已证伪并据此修订」，方可进入编程阶段。
