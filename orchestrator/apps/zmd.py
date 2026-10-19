@@ -15,9 +15,10 @@
 ⚠️ 本模块**不 import** match/verdict/step8 —— 专属逻辑不许反向依赖共用层。
 """
 
+import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -1009,3 +1010,385 @@ def zmd_run(state, args, frame, log):
 
     result, why, path = zmd_wait_completion(state, args, log, zw, prog)
     return finish(state, result, why, path, log)
+
+# ==========================================================================
+# 3) 自我更新闸门（节点 5 等它更完 / 节点 6 点「知道了」）
+# ==========================================================================
+#
+# ## 实测（2026-10-19 23:35~23:43，v2.34.0-rc.1 -> v2.34.0，更新包 300MB）
+#
+# MaaEnd 自带应用本体更新（右上角铃铛 -> 下载 -> 解压替换 -> **自动重启** ->
+# 模态框「更新完成 / 已成功更新到最新版本」+ 右下绿色「知道了」）。全生命周期
+# 都在 `debug/mxu-tauri*.log`（模块 `mxu_lib::commands::download` /
+# `::update`）与 `debug/<date>-<n>.log`（应用日志）里留下了**可判读的标记**：
+#
+#   1. `[INFO][mxu_lib::commands::download] 找到匹配的 Release: v2.34.0`
+#   2. `download_file: https://.../MaaEnd-win-x86_64-v2.34.0.zip -> ...cache/...`
+#      +`download_file session_id: 1`（约 7 分钟，300MB）
+#   3. `download_file completed: 313755110 bytes -> ...MaaEnd-win-x86_64-v2.34.0.zip`
+#   4. `[mxu_lib::commands::update] extract_zip called ...` -> `extract_zip success`
+#      -> `apply_full_update called` -> 大量 `Moved to old: ...cache/old/...`
+#   5. 重启（旧 mxu-tauri.log 被轮转成 mxu-tauri_<date>_<HH-MM-SS>.log），
+#      新应用日志里出现 `[App] 检测到刚更新完成: v2.34.0`（= 弹窗那一刻）
+#
+# ## 为什么必须挡在节点 5（而不是只在节点 6 点按钮）
+#
+# 解压替换发生在应用**运行期间**，随后进程自己重启 —— 若正好落在节点 5
+# 的采样窗口里，节点 5 会诚实但无用地说「窗口未就绪」；而节点 6 的身份校验
+# 也会因为「绿按钮被模态遮罩压暗」（实测白占比 0.171 -> 0.000）而失败。
+# 所以两段闸门各管一段：
+#
+#   节点 5 `zmd_update_wait`    只读日志，等「下载/安装/重启」收敛，**不点**
+#                               （此时可能还没有可用帧）；先它、后 require_hwnd，
+#                               因为重启会换 hwnd（INV-14）。
+#   节点 6 `zmd_update_dismiss` 已经能抓帧 + 置前台，按**双证据**点「知道了」：
+#                               应用日志有 `检测到刚更新完成` **且** 帧里有
+#                               ack 形态绿块。只有日志没有按钮 ⇒ 立即判「弹窗
+#                               已不在」返回（标记会一直留在日志里，不能空等）；
+#                               只有按钮没有日志 ⇒ **不点**（避免点到同款绿块）。
+#
+# ⚠️ 更新包只认文件名里的 `MaaEnd-win-x86_64`：MaaEnd 还会下**资源包 /
+#    MaaFramework 包**（别的文件名），把那些当自我更新就会白等半小时。
+#
+# ⚠️ 应用日志 `<date>-<n>.log` 每次启动都被清空重建（`Auto-cleared log files
+#    and debug artifacts on launch: 2`），所以「最新一份」天然属于**当前实例**；
+#    绝不要用通配把 maafw.log 之类一起读进来。
+
+ZMD_APP_LOG_RX = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d+)\.log$")
+ZMD_UPD_ZIP_MARK = "MaaEnd-win-x86_64"
+ZMD_UPD_DETECT = r"找到匹配的 Release:"
+ZMD_UPD_DL_START = r"download_file:"
+ZMD_UPD_DL_DONE = r"download_file completed:"
+ZMD_UPD_INSTALL = r"\[mxu_lib::commands::update\]"
+ZMD_UPD_FINISHED = r"检测到刚更新完成"
+
+ZMD_UPDATE_WAIT_SECONDS = 1800.0     # 实测 300MB 约 7 分钟；给到 30 分钟
+ZMD_UPDATE_POLL = 3.0                # 日志轮询间隔（下载期间没必要更密）
+ZMD_UPDATE_LOOKBACK = 3600.0         # 只看最近 1 小时的行（排除前一天的旧安装）
+ZMD_UPDATE_DETECT_GRACE = 90.0       # 只有「找到匹配的 Release」时的等待宽限
+
+# 「知道了」的几何判据（与 zmd_locate_start 的**四道闸门不同**，见 fixture 实测：
+# done 帧 76x40 cells=181 白占比 0.171 中心 (834,704)；被遮罩压暗的「开始任务」
+# 104x28 cells=132 白占比 0.000；下载中帧是正常的 116x36 白占比 0.087）
+ZMD_ACK_MIN_CELLS = 60
+ZMD_ACK_W_MIN, ZMD_ACK_W_MAX = 50, 160
+ZMD_ACK_H_MIN, ZMD_ACK_H_MAX = 24, 64
+ZMD_ACK_WH_MIN, ZMD_ACK_WH_MAX = 1.5, 3.0
+ZMD_ACK_WHITE_MIN = 0.05
+ZMD_ACK_Y1_FRAC = 0.92               # 下沿必须在底部控制条**之上**（排除开始任务）
+ZMD_ACK_Y0_FRAC = 0.50               # 上半屏不放（模态框按钮在下半屏）
+ZMD_ACK_X_FRAC = 0.45                # 右半边（「知道了」在右侧）
+ZMD_ACK_RATIO = 0.5                  # 第二候选 >= 最优的一半 => 歧义，不点
+ZMD_ACK_CLICK_TRIES = 3
+
+
+def _zmd_prog_logdir(logdir=None):
+    """zmd 的 debug 目录：Program.logdir 可覆盖，默认 ZMD_LOGDIR。"""
+    try:
+        prog = programs_mod.get("zmd")
+    except (KeyError, ValueError):
+        prog = None
+    return Path(logdir or getattr(prog, "logdir", None) or ZMD_LOGDIR)
+
+
+def zmd_app_log_path(logdir=None):
+    """最新一份**应用日志** `<date>-<n>.log`（每次启动重建，故属于当前实例）。
+
+    按 (日期, 序号) 取最大：序号是当天启动次数的自增计数器。
+    找不到返回 None（首次启动、日志被手动清掉等），调用方必须容忍。
+    """
+    d = _zmd_prog_logdir(logdir)
+    best = None
+    try:
+        names = list(d.iterdir())
+    except OSError:
+        return None
+    for p in names:
+        m = ZMD_APP_LOG_RX.match(p.name)
+        if not m:
+            continue
+        key = (m.group(1), int(m.group(2)))
+        if best is None or key > best[0]:
+            best = (key, p)
+    return best[1] if best else None
+
+
+def _zmd_app_log_text(logdir=None, nbytes=1 << 20):
+    p = zmd_app_log_path(logdir)
+    if p is None:
+        return ""
+    return _zmd_read_tail(p, nbytes) or ""
+
+
+def zmd_update_phase(tauri_text, app_text, baseline=None):
+    """**纯函数**：从两段日志文本判定自我更新现在处于哪一阶段（可离线单测）。
+
+    返回 `{"phase": str, "evidence": [行...], "zip": str|None}`，phase 取值：
+
+      `idle`        没有更新活动（**默认放行**）
+      `detecting`   只看到「找到匹配的 Release」（可能只是版本检查，宽限 90s）
+      `downloading` 已开始下 MaaEnd 本体更新包、还没下完
+      `installing`  下载完成 / 正在解压替换（随时会重启）
+      `finished`    应用日志出现「检测到刚更新完成」⇒ 已重启，弹窗可能在场
+
+    判定顺序：**最后一条事件说了算**（重新从 downloading 走一遍时不会被
+    上一轮的 install 行污染）；`finished` 优先级最高（它就是重启后的状态）。
+    `baseline` 给定时丢弃时间戳早于它的行（无时间戳的行一并丢弃 —— 它们
+    是上一行的延续，宁可少判也不要误判）。
+    """
+    ev = []
+    phase = "idle"
+    zipname = None
+    for line in (tauri_text or "").splitlines():
+        if not line.strip():
+            continue
+        if baseline is not None:
+            ts = zmd_parse_ts(line)
+            if ts is None or ts < baseline:
+                continue
+        if re.search(ZMD_UPD_INSTALL, line):
+            phase = "installing"
+            ev.append(line)
+        elif ZMD_UPD_ZIP_MARK in line and re.search(ZMD_UPD_DL_DONE, line):
+            phase = "installing"
+            ev.append(line)
+        elif ZMD_UPD_ZIP_MARK in line and re.search(ZMD_UPD_DL_START, line):
+            phase = "downloading"
+            ev.append(line)
+            m = re.search(r"([\w.\-]*" + re.escape(ZMD_UPD_ZIP_MARK) + r"[\w.\-]*\.zip)",
+                          line, re.I)
+            if m:
+                zipname = m.group(1)
+        elif re.search(ZMD_UPD_DETECT, line):
+            if phase == "idle":
+                phase = "detecting"
+            ev.append(line)
+
+    for line in (app_text or "").splitlines():
+        if not re.search(ZMD_UPD_FINISHED, line):
+            continue
+        if baseline is not None:
+            ts = zmd_parse_ts(line)
+            if ts is not None and ts < baseline:
+                continue
+        phase = "finished"
+        ev.append(line)
+
+    return {"phase": phase, "evidence": ev[-4:], "zip": zipname}
+
+
+def zmd_update_baseline(now=None, lookback=ZMD_UPDATE_LOOKBACK):
+    """闸门的时间地板：只看最近 lookback 秒内的日志行。"""
+    now = now or datetime.now()
+    return now - timedelta(seconds=float(lookback))
+
+
+def _zmd_update_probe(logdir=None, baseline=None):
+    """读两份日志并判阶段（在线路径与单跑共用）。"""
+    tauri = _zmd_read_tail(_zmd_log_path(), ZMD_SELFCHECK_BYTES) or ""
+    app = _zmd_app_log_text(logdir)
+    return zmd_update_phase(tauri, app, baseline)
+
+
+def zmd_update_wait(state, log, max_wait=ZMD_UPDATE_WAIT_SECONDS, lookback=None):
+    """节点 5 用：只读日志，等「下载 / 安装 / 重启」收敛。**不点任何东西**。
+
+    返回 `{"state": "ready"|"timeout", "phase":..., "waited":秒, "evidence":[...]}`。
+    超时**不**自动放行：由节点 5 判失败并把 phase 写进 note（INV-30）。
+    """
+    baseline = zmd_update_baseline(lookback=lookback if lookback is not None
+                                   else ZMD_UPDATE_LOOKBACK)
+    t0 = time.time()
+    seen, detect_since = None, None
+    log(f"  [更新闸门] 先查自我更新（只读日志，不点界面）")
+    log(f"    应用日志：{zmd_app_log_path()}")
+    log(f"    下载日志：{_zmd_log_path()}")
+    while True:
+        info = _zmd_update_probe(baseline=baseline)
+        ph = info["phase"]
+        if ph != seen:
+            log(f"    阶段：{ph}")
+            if info["evidence"]:
+                log(f"    证据：{_zmd_clean(info['evidence'][-1])[:160]}")
+            seen = ph
+        if ph == "idle":
+            log(f"  [更新闸门] 无更新活动（+{time.time() - t0:.0f}s）—— 继续")
+            return {"state": "ready", "phase": ph, "waited": round(time.time() - t0, 1),
+                    "evidence": []}
+        if ph == "finished":
+            log(f"  [更新闸门] 更新已完成并重启（+{time.time() - t0:.0f}s）；"
+                f"弹窗留给节点 6 处理")
+            return {"state": "ready", "phase": ph, "waited": round(time.time() - t0, 1),
+                    "evidence": [_zmd_clean(x)[:120] for x in info["evidence"]]}
+        if ph == "detecting":
+            if detect_since is None:
+                detect_since = time.time()
+            elif time.time() - detect_since > ZMD_UPDATE_DETECT_GRACE:
+                log("  [注] 只有「找到匹配的 Release」、没有下载动作 ——"
+                    " 判为与本闸门无关的版本检查，放行")
+                return {"state": "ready", "phase": "detecting_stale",
+                        "waited": round(time.time() - t0, 1),
+                        "evidence": [_zmd_clean(x)[:120] for x in info["evidence"]]}
+        waited = time.time() - t0
+        if waited > max_wait:
+            return {"state": "timeout", "phase": ph, "waited": round(waited, 1),
+                    "evidence": [_zmd_clean(x)[:120] for x in info["evidence"]]}
+        time.sleep(ZMD_UPDATE_POLL)
+
+
+def zmd_locate_ack(frame_rgb, log=None):
+    """在帧里找「知道了」那个绿色按钮。返回 `{"button": dict|None, ...}`。
+
+    ⚠️ 与 `zmd_locate_start` **不能共用判据**：那个按钮在底部 15% 带、
+    宽高比 2~4；这个在模态框里、宽高比约 1.9、下沿**必须高于**底部控制条
+    （否则会把被遮罩压暗的「开始任务」当目标 —— 实测它仍有 132 格绿）。
+    """
+    a = np.asarray(frame_rgb, dtype=np.int16)
+    if a.ndim != 3 or a.shape[2] < 3:
+        raise GuardFailure(
+            "INV-24", f"「知道了」定位失败：期望 HxWx3 的 RGB 帧，收到 shape={a.shape}")
+    H, W = a.shape[:2]
+    mask = zmd_green_mask(a)
+    comps = zmd_components(mask)
+    step2 = ZMD_COMP_STEP * ZMD_COMP_STEP
+
+    cands, rejected = [], []
+    for c in comps:
+        x0, y0, x1, y1 = c["box"]
+        w, h = c["w"], c["h"]
+        area = c["cells"] * step2
+        reason = None
+        if c["cells"] < ZMD_ACK_MIN_CELLS:
+            reason = f"格数 {c['cells']} < {ZMD_ACK_MIN_CELLS}"
+        elif not (ZMD_ACK_W_MIN <= w <= ZMD_ACK_W_MAX):
+            reason = f"宽 {w} 不在 [{ZMD_ACK_W_MIN}, {ZMD_ACK_W_MAX}]"
+        elif not (ZMD_ACK_H_MIN <= h <= ZMD_ACK_H_MAX):
+            reason = f"高 {h} 不在 [{ZMD_ACK_H_MIN}, {ZMD_ACK_H_MAX}]"
+        elif not (ZMD_ACK_WH_MIN <= w / float(h) <= ZMD_ACK_WH_MAX):
+            reason = f"宽高比 {w / float(h):.2f} 不在 [{ZMD_ACK_WH_MIN}, {ZMD_ACK_WH_MAX}]"
+        elif y1 > H * ZMD_ACK_Y1_FRAC:
+            reason = f"y1={y1} 踩到底部带（需 <= {int(H * ZMD_ACK_Y1_FRAC)}，那是开始任务）"
+        elif y0 < H * ZMD_ACK_Y0_FRAC:
+            reason = f"y0={y0} 在上半屏（需 >= {int(H * ZMD_ACK_Y0_FRAC)}）"
+        elif c["center"][0] < W * ZMD_ACK_X_FRAC:
+            reason = f"x={c['center'][0]} 在左半边（需 >= {int(W * ZMD_ACK_X_FRAC)}）"
+        if reason is not None:
+            rejected.append((c, reason))
+            continue
+        sub = a[y0:y1, x0:x1]
+        n_px = sub.shape[0] * sub.shape[1]
+        white = int((((sub[:, :, 0] >= ZMD_WHITE_MIN)
+                      & (sub[:, :, 1] >= ZMD_WHITE_MIN)
+                      & (sub[:, :, 2] >= ZMD_WHITE_MIN))).sum())
+        wf = (white / n_px) if n_px else 0.0
+        if wf < ZMD_ACK_WHITE_MIN:
+            rejected.append((c, f"白占比 {wf:.3f} < {ZMD_ACK_WHITE_MIN}（无文字）"))
+            continue
+        cands.append({"box": (x0, y0, x1, y1), "center": c["center"],
+                      "w": w, "h": h, "area": area, "white_frac": wf,
+                      "cells": c["cells"]})
+
+    out = {"button": None, "candidates": cands,
+           "rejected": [(c["box"], r) for c, r in rejected[:6]],
+           "frame_size": (W, H), "reason": None}
+    if not cands:
+        out["reason"] = "没有符合 ack 形态的绿块"
+        if log:
+            log(f"    [zmd] 未找到「知道了」（连通域 {len(comps)} 个，"
+                f"被拒 {len(rejected)} 个）")
+            for box, r in out["rejected"][:4]:
+                log(f"      box={box} {r}")
+        return out
+
+    cands.sort(key=lambda c: -c["area"])
+    best = cands[0]
+    if len(cands) > 1 and cands[1]["area"] >= best["area"] * ZMD_ACK_RATIO:
+        out["reason"] = (f"歧义：第二候选 area={cands[1]['area']} "
+                         f">= {ZMD_ACK_RATIO} x 最优 {best['area']}")
+        if log:
+            log(f"    [zmd] [!!] {out['reason']} —— 不点")
+        return out
+    out["button"] = best
+    if log:
+        log(f"    [zmd] 「知道了」box={best['box']} center={best['center']} "
+            f"白占比={best['white_frac']:.3f} 帧={W}x{H}")
+    return out
+
+
+def zmd_update_dismiss(state, log, max_tries=ZMD_ACK_CLICK_TRIES):
+    """节点 6 用：若更新完成弹窗在场，点掉它。返回 dict（state 见下）。
+
+      `skipped`    最新应用日志里没有「检测到刚更新完成」⇒ 没发生过更新
+      `no_modal`   有标记但画面上没有「知道了」⇒ 弹窗已不在（**立即返回**）
+      `dismissed`  找到并点掉了
+      `failed`     点了点不掉 / 抓帧或点击被不变量拦下
+
+    ⚠️ 双证据才点：日志标记 **且** 帧里 ack 形态绿块。只有按钮没有标记时
+    **不点** —— 那个绿块可能是别处同款元素（绿色是 MaaEnd 的状态色首选）。
+    """
+    app_path = zmd_app_log_path()
+    app_text = _zmd_app_log_text()
+    if not re.search(ZMD_UPD_FINISHED, app_text):
+        log(f"  [更新闸门] 无「更新完成」标记（{app_path}）—— 无需处理")
+        return {"state": "skipped", "app_log": str(app_path)}
+
+    from ..steps import context   # 函数内 import：避免 apps <-> steps 的导入环
+
+    log(f"  [更新闸门] 应用日志有「检测到刚更新完成」—— 检查是否有「知道了」弹窗")
+    for attempt in range(1, max_tries + 1):
+        hwnd = context.require_hwnd(state, log=None)
+        if not hwnd:
+            log(f"    第 {attempt} 次：窗口还没回来 —— 等 3s")
+            time.sleep(3.0)
+            continue
+        try:
+            input_mod.ensure_foreground(hwnd, log=None)
+            f = capture_mod.grab_frame(hwnd)
+        except GuardFailure as e:
+            log(f"    [!!] [{e.invariant}] {e.detail.splitlines()[0]}")
+            if attempt == max_tries:
+                return {"state": "failed", "why": f"{e.invariant}: {e.detail[:200]}"}
+            time.sleep(2.0)
+            continue
+
+        info = zmd_locate_ack(f.rgb, log=log)
+        btn = info["button"]
+        if btn is None:
+            log(f"  [更新闸门] 弹窗**已不在**（{info['reason']}）—— 直接继续")
+            return {"state": "no_modal", "reason": info["reason"],
+                    "frame_size": list(info["frame_size"])}
+
+        dst = state.shot_path(f"zmd-update-ack-{attempt}")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        from PIL import Image
+        Image.fromarray(f.rgb).save(dst)
+        state.add_shot("6", dst)
+        log(f"    [落盘] {os.path.relpath(dst, state.run_dir)}  ← 请肉眼复核")
+
+        sx, sy = f.screen_xy(*btn["center"])
+        state.set("hwnd", hwnd)
+        log(f"    点击「知道了」({sx},{sy}) 第 {attempt}/{max_tries} 次")
+        try:
+            input_mod.guarded_click(hwnd, sx, sy, log=log)
+        except GuardFailure as e:
+            log(f"    [!!] [{e.invariant}] {e.detail.splitlines()[0]}")
+            if attempt == max_tries:
+                return {"state": "failed", "why": f"{e.invariant}: {e.detail[:200]}"}
+            time.sleep(2.0)
+            continue
+
+        time.sleep(1.0)
+        try:
+            h2 = context.require_hwnd(state, log=None) or hwnd
+            f2 = capture_mod.grab_frame(h2)
+        except GuardFailure as e:
+            log(f"    [注] 点后复抓帧失败（{e.invariant}）：无法确认弹窗消失")
+            return {"state": "dismissed", "confirmed": False, "clicked": [sx, sy]}
+        after = zmd_locate_ack(f2.rgb)
+        if after["button"] is None:
+            log("    [OK] 「知道了」已消失 —— 界面可继续")
+            return {"state": "dismissed", "confirmed": True, "clicked": [sx, sy],
+                    "box": list(btn["box"])}
+        log("    [!!] 点后仍能定位到「知道了」—— 重试")
+    return {"state": "failed", "why": f"{max_tries} 次点击后弹窗仍在"}
+

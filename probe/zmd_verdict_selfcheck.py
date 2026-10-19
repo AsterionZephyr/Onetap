@@ -273,7 +273,17 @@ else:
 # ============================================================================
 print("\n--- 4. 自检函数（读不到 / 认不出）---")
 probs = v.zmd_log_self_check()
-check("真实环境下 zmd_log_self_check() 无问题", probs == [], probs)
+# MaaEnd 每次启动都会重建 mxu-tauri.log ⇒ 「当前实例还没跑过任何任务」时，
+# 认不出 start/stop 是**预期**的（函数自己的措辞就是这么说的），不能算失败。
+_live_txt = LIVE.read_text(encoding="utf-8", errors="replace") if LIVE.exists() else ""
+_pristine = ("start_tasks" not in _live_txt) and ("stop_agent_impl" not in _live_txt)
+if _pristine:
+    note("当前实例的 mxu-tauri.log 里没有任何任务痕迹（从未跑过任务）"
+         "⇒ 只要求问题全部属于「认不出、从未跑过任务时属正常」这一类")
+    check("真实环境 / 干净实例 => 只允许「认不出」两类问题",
+          all("从未跑过任务" in p for p in probs), probs)
+else:
+    check("真实环境下 zmd_log_self_check() 无问题", probs == [], probs)
 missing = v.zmd_log_self_check(TMPDIR / "nope.log")
 check("文件不存在 => 1 条问题，且说明「从未跑过任务时属正常」",
       len(missing) == 1 and "从未跑过任务" in missing[0], missing)

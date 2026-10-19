@@ -70,6 +70,8 @@ def extra_args(ap):
                     help=f"重试间隔（秒，默认 {IDENTITY_INTERVAL:.1f}）")
     ap.add_argument("--no-foreground", action="store_true",
                     help="抓帧前不置前台（诊断用；会抓到遮挡窗口，见 FAULT #16）")
+    ap.add_argument("--no-update-gate", action="store_true",
+                    help="跳过目标程序的自我更新弹窗处理（MaaEnd 专用；诊断用）")
 
 
 def load_rgb(path):
@@ -163,6 +165,21 @@ def body(args, state, log):
     # --- 在线模式：真实抓帧 ----------------------------------------
     hwnd = context.require_hwnd(state, log=log)
     strict = not args.no_strict_content
+
+    # ★ MaaEnd 自我更新：重启后会有「更新完成」模态框盖住界面。它在场时
+    # 「开始任务」被遮罩压暗（实测白占比 0.171 -> 0.000），下面的身份校验
+    # 必然失败 —— 那不是窗口有问题，是**有个按钮等着点**。
+    # 双证据才点（应用日志「检测到刚更新完成」+ 帧里 ack 形态绿块）；
+    # 只有标记没有按钮 ⇒ 立即判「弹窗已不在」，不在这里空等。
+    # 注意它必须在身份校验**之前**：身份校验用的锚点正是被遮罩压暗的那个按钮。
+    if prog.key == "zmd" and not args.no_update_gate:
+        from .. import apps as apps_mod
+        upd = apps_mod.get("zmd").zmd_update_dismiss(state, log=log)
+        state.set("update_dismiss", upd)
+        if upd["state"] == "failed":
+            log(f"  [!!] 更新完成弹窗处理失败：{upd.get('why', '?')}")
+            return "failed", {"hwnd": hwnd, "update_dismiss": upd}, \
+                f"更新完成弹窗未处理：{upd.get('why', '?')[:120]}"
 
     # FAULT #14：身份校验失败时**重试**（等 ok-ww 的浮层自行消失）。
     # 每次重试都重跑完整的不变量链 —— 不用「跳过校验」换取通过。

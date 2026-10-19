@@ -1480,6 +1480,96 @@ ok-nte   程序 0 个 []  游戏 1 个 [('NTEGame.exe', 32272)]
 
 ⇒ **至此「MaaEnd → ok-ww → ok-nte 串联一次全绿」已成事实**，用户要求的顺序与隔离性都有实测依据。
 
+### 5.12 实测：MaaEnd 自我更新（2026-10-19 23:43 全生命周期取证 → 2026-10-20 闸门接入）
+
+**结论：更新是「铃声气泡 → 下载 300MB → 解压覆盖并自动重启 → 重启后弹模态框」四段，
+只有「重启后弹窗」这一段需要点按钮（右下「知道了」）；下载/安装期间窗口可能整只消失重建。
+闸门拆成两半挂在共用节点里、只对 zmd 生效：节点 5 只读日志等收敛（不点），节点 6 双证据点「知道了」。**
+
+用户报告（m01754）：更新时右上角出现铃铛；更新完成后自动重启并弹窗告知更新内容，需点「知道了」。
+两张现场截图存为 fixture：`probe/fixtures/zmd_update_downloading.png`（1182×814，「发现新版本 v2.34.0」
+气泡 + 下载中 10.1MB/299.2MB 3.4% + 通过海外渠道 GitHub）、`probe/fixtures/zmd_update_done.png`
+（1184×816，模态框「更新完成 v2.34.0 / 已成功更新到最新版本」+ 右下绿色「知道了」）。
+
+#### 日志生命周期（只读取证，`E:\TOOLS\ScriptsGames\zmd\debug\mxu-tauri_2026-10-19_23-43-20.log`）
+
+模块名两类：`mxu_lib::commands::download`（下载）、`mxu_lib::commands::update`（解压/覆盖）：
+
+| 阶段 | 日志原文（关键片段） | 时刻 |
+| --- | --- | --- |
+| 发现 | `找到匹配的 Release: v2.34.0 (tag: v2.34.0)` | 23:35:25 |
+| 下载开始 | `download_file: https://github.com/MaaEnd/MaaEnd/releases/download/v2.34.0/MaaEnd-win-x86_64-v2.34.0.zip -> E:/TOOLS/ScriptsGames/zmd/cache/…` + `download_file session_id: 1` | 23:35 |
+| 下载完成 | `download_file completed: 313755110 bytes -> …zip (session 2)` | 23:42:42 |
+| 安装 | `[mxu_lib::commands::update] extract_zip called` → `extract_zip success` → `apply_full_update called` → 大量 `Moved to old: … -> …cache/old/…` | 23:42:43～23:43:0x |
+| **重启后弹窗** | 新应用日志 `2026-10-19-6.log`：`[App] 已读取更新完成信息: v2.34.0` / `[App] 已清除待安装更新信息` / **`[App] 检测到刚更新完成: v2.34.0`** | 23:43:20 |
+
+两个必须知道的日志事实：
+
+1. **应用日志每次启动清空重建**，文件名 `<YYYY-MM-DD>-<n>.log`（同日序号自增），启动行
+   `Auto-cleared log files and debug artifacts on launch: 2`。`mxu-tauri.log` 同时被轮转成
+   `mxu-tauri_<date>_<HH-MM-SS>.log`，`maafw.log` 重建。⇒ 判「刚更新完成」**只能读最新的应用日志**，
+   且该标记会一直留到下次启动，**不可当作「此刻有弹窗」的证据**。
+2. **更新包与资源包同走 download 模块**，只有包名含 `MaaEnd-win-x86_64` 的才是程序自我更新。
+
+#### 像素事实（`probe/fixtures/` 两张，`zmd_green_mask` + `zmd_components`，step=4）
+
+| 帧 | 目标 | cells | box | w×h | 白占比 | y0/H |
+| --- | --- | --- | --- | --- | --- | --- |
+| update_done | **「知道了」** | 181 | (796,684,872,724) | 76×40 | 0.171 | 0.838 |
+| update_done | 被模态遮罩压暗的「开始任务」 | 132 | (740,776,844,804) | 104×28 | **0.000** | 0.951 |
+| update_downloading | 正常「开始任务」 | 254 | (732,772,848,808) | 116×36 | 0.087 | 0.948 |
+
+⇒ 模态遮罩把身份锚点（底部绿按钮）的白占比打到 0，**节点 6 的身份校验在弹窗态必然失败**，
+所以必须先点掉弹窗、再验身份（这也是把 dismiss 放在身份校验循环之前的原因）。
+
+#### 闸门实现（`orchestrator/apps/zmd.py` 第 3 段）
+
+| 函数 | 作用 | 关键约束 |
+| --- | --- | --- |
+| `zmd_app_log_path(logdir=None)` | 取当前实例的应用日志 | 按 (日期, 序号) 取最大，不信 mtime |
+| `zmd_update_phase(tauri_text, app_text, baseline=None)` | 纯函数状态机 → idle/detecting/downloading/installing/finished | **最后一条事件说了算**，finished 优先级最高；只认 `MaaEnd-win-x86_64` 包；baseline 之后才生效（丢更早与无时间戳的行） |
+| `zmd_update_wait(state, log, max_wait=1800, lookback=None)` | 节点 5：只等不点 | idle/finished 立即放行；detecting 超 `ZMD_UPDATE_DETECT_GRACE`=90s 记 `detecting_stale` 放行；downloading/installing 轮询到 `max_wait` 后 **timeout ⇒ 节点失败**（INV-30） |
+| `zmd_locate_ack(frame_rgb, log=None)` | 在帧里找「知道了」 | 八道闸门见下；按 area 取最大；**第二候选 ≥ 0.5× 最优即判歧义不点** |
+| `zmd_update_dismiss(state, log, max_tries=3)` | 节点 6：双证据 + 点击 + 复核 | 日志有 `检测到刚更新完成` **且** 帧里有 ack 块才点；只有标记没按钮 ⇒ `no_modal` **立即返回**（否则会白等 30 分钟）；点后重抓帧确认 ack 消失 |
+
+「知道了」的八道闸门（与 `zmd_locate_start` 的四道**不同**，因为它在窗口中部、不在底部带）：
+
+```
+cells >= 60        50 <= w <= 160      24 <= h <= 64        1.5 <= w/h <= 3.0
+白占比 >= 0.05     y1 <= 0.92H（排除底部「开始任务」）      y0 >= 0.5H      ctr_x >= 0.45W
+```
+
+挂接方式（**只对 `prog.key == "zmd"` 生效**，ww/nte 完全不受影响）：
+
+- 节点 5 `orchestrator/steps/step5_wait_ready.py`：在 `window.wait_for_ready()` **之前**、
+  `context.require_hwnd()` **之前**调 `zmd_update_wait`。理由：安装会重启进程换 hwnd（INV-14），
+  若先 `require_hwnd` 会拿到旧句柄；也不能让节点 5 在重启期间诚实地说「窗口未就绪」。
+  新增参数 `--no-update-gate`、`--update-wait`（默认 1800s）。
+- 节点 6 `orchestrator/steps/step6_first_frame.py`：`require_hwnd` 之后、身份校验循环之前调
+  `zmd_update_dismiss`；failed ⇒ 节点失败。新增参数 `--no-update-gate`。
+
+#### 离线自检（`probe/zmd_update_selfcheck.py`，285 行 / 7 组用例，全部通过）
+
+| 用例 | 断言 | 实测 |
+| --- | --- | --- |
+| done 帧找 ack | 命中且居中 | box=(796,684,872,724) center=(834,704) area=2896 白占比=0.171 |
+| downloading 帧 | 无 ack | candidates=0 |
+| 正常帧 | 无 ack，且底部「开始任务」被 y1 闸门拒 | 744,772,856,812 因 `y1=812 踩到底部带（需 <= 759）` 被拒 |
+| 人为贴一块绿到 (900,450) | 判歧义不点 | 2 候选，reason「第二候选 area=2688 >= 0.5 × 最优 2896」 |
+| 状态机 9 条 | 含「资源包不算自我更新」「baseline 过滤」「finished 优先」 | 全过 |
+| 驱动 | idle/finished 立刻放行、detecting 宽限后 detecting_stale、downloading 到 max_wait 报 timeout | 全过 |
+| 真实日志 | `debug/2026-10-19-6.log`（12677 字符）判 finished | 通过 |
+
+#### 实跑冒烟（`logs/runs/run-20261020-004747`，节点 2→6）
+
+MaaEnd 当时未运行（用户已关），框架自行拉起：节点 2（0.9s）→ 4（3.3s，hwnd=2754478 pid=26596
+`Tauri Window`）→ 5（2.8s 就绪 1201×826，**更新闸门判 idle 立即放行**）→ 6（1.1s，身份 1.0000，
+`开始任务` box=(744,772,856,812) 白占比 0.1489，**未触发 dismiss**——该实例应用日志里没有
+`检测到刚更新完成`）。整链 `CHAIN_EXIT=0`。
+
+⇒ 回归面：更新闸门在**没有更新**的常态下零副作用（多读一次日志 + 一次绿块连通域扫描）。
+**尚未实测的是「真更新」（下载/安装/重启/弹窗全流程）**——那只能等 MaaEnd 下次自己发版时撞上。
+
 ### 出口条件
 
 本文件全部 `[待验证]` 项转为「已证实」或「已证伪并据此修订」，方可进入编程阶段。
