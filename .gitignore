@@ -9,6 +9,15 @@ venv/
 logs/
 probe-shots/
 
+# 本地快捷方式：.lnk 里写的是本机绝对路径，不入库
+*.lnk
+
+# 本机临时产物：Windows 缓存转储、工具临时目录、调试输出
+%SystemDrive%/
+.dsh-tmp/
+debug.log
+_pyout.txt
+
 # 编辑器 / 系统
 .vscode/
 .idea/
