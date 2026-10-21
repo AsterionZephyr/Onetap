@@ -52,6 +52,36 @@ NODE_STYLE = {
     None:      ("\u25cb", "#9e9e9e", "#ffffff", "未运行"),
 }
 
+# 步骤行副标题（note）的**显示**上限。
+#
+# 为什么要有：note 是节点写进 state.json 的**全量证据**。节点 8 完成后是
+#     completed：汇总 success=[...7 项...] failed=[] skipped=['异象追猎']；
+#     终止标记=True 日常结束=True 杀游戏=False；出现终止标记（进程收尾）
+# （ok-nte 实测 110 字符）。而 Tk 的 Label 在**没有 wraplength** 时
+# 「请求宽度 = 文本宽度」，这个宽度会被 pack/grid 算进左栏的自然宽度 ⇒
+# 左栏（本应 1/5）被撑到 ~380px、右侧日志被挤窄（2026-10-20 用户截图发现）。
+#
+# 步骤行只是**摘要**：完整 note 在 state.json，完整 detail 在日志面板里。
+# 两件事一起做，缺一不可：
+#   ① 截断到 NOTE_MAX 个字符 + "…" —— 长度可预期，行高不随证据膨胀；
+#   ② 标签设 wraplength = NOTE_WRAP 兜底 —— 以后再长的 note 只会折行，
+#      绝不把列宽撑开（截断管"短"，兜底管"宽度下限"）。
+NOTE_MAX = 26
+NOTE_WRAP = 200
+
+
+def _short_note(note, limit=NOTE_MAX):
+    """note -> **单行**摘要：折叠所有空白；超过 limit 个字符就截断加 "…"。
+
+    ⚠️ 只影响**界面显示**。state.json 的 `notes` 与主控日志里的 detail
+    一律保持原文 —— COMPLETION-VERDICT 的证据链不能因为界面变短而丢东西。
+    """
+    s = " ".join(str(note).split())
+    if len(s) <= limit:
+        return s
+    return s[:max(1, limit - 1)].rstrip() + "\u2026"
+
+
 # 目标程序清单：**任意多选**，来源见 gui/targets.py（ast 静态读
 # orchestrator/programs.py，读不出来就回落兜底值并在界面上告警）。
 # ⚠️ 与 gui/chain.py 同样的理由：这里**独立声明**，不 import orchestrator，
@@ -457,8 +487,11 @@ class App(tk.Tk):
         title = tk.Label(body, text=name, bg="#ffffff", anchor="w",
                          font=("Microsoft YaHei UI", 9, "bold"))
         title.pack(fill="x")
+        # wraplength 是**防撑宽**的最后一道闸：没有它时 Label 的"请求宽度"
+        # 等于整行文本宽度，grid 会把左栏按这条最长 note 撑开（见 NOTE_MAX 注释）。
         sub = tk.Label(body, text="", bg="#ffffff", anchor="w", fg="#8a8a8a",
-                       font=("Microsoft YaHei UI", 8))
+                       font=("Microsoft YaHei UI", 8), justify="left",
+                       wraplength=NOTE_WRAP)
         sub.pack(fill="x")
 
         dot = tk.Label(row, text="\u25cb", width=2, bg="#ffffff", fg="#9e9e9e",
@@ -483,7 +516,10 @@ class App(tk.Tk):
         info["frame"].config(bg=bg)
         info["body"].config(bg=bg)
         info["title"].config(bg=bg)
-        info["sub"].config(bg=bg, text=note if note is not None else label)
+        # note 是节点写的全量证据（可能上百字符），步骤行只放**摘要**，
+        # 原文在 state.json 与日志里；见 NOTE_MAX / _short_note()。
+        info["sub"].config(bg=bg,
+                           text=_short_note(note) if note is not None else label)
         info["num"].config(bg="#e4e4e4" if not selected else "#c7ddf5")
 
     # ------------------------------------------------------------- 第 1 页
