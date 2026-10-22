@@ -115,7 +115,7 @@ python -X utf8 -m orchestrator.steps.main --from 6
 | [docs/CONTEXT.md](./docs/CONTEXT.md) | **领域术语表**（窗口持有者、匹配锚点、动作前置关、完成帧、静默失效……） |
 | [docs/HISTORY.md](./docs/HISTORY.md) | **实测与历史**：各阶段实测、工具环境、0.1 版与旧编排层记录、ok-ww 窗口事实附录 |
 | [docs/FAULT-LOG.md](./docs/FAULT-LOG.md) | **故障流水账**：每次踩坑的现场、归因与修复 |
-| [docs/adr/](./docs/adr/) | **决策记录**：0001 黑盒真实光标 / 0002 锚点组合与联合唯一性 / 0003 每程序专项模块 / 0004 Tkinter 而非 Web / 0005 节点链属于每个程序 / 0006 工作区目录契约 |
+| [docs/adr/](./docs/adr/) | **决策记录**：0001 黑盒真实光标 / 0002 锚点组合与联合唯一性 / 0003 每程序专项模块 / 0004 Tkinter 而非 Web / 0005 节点链属于每个程序 / 0006 工作区目录契约 / 0007 文档分层与单一事实源 |
 | [AGENTS.md](./AGENTS.md) | 新会话必须知道、否则会做错的约定（目录、动手前、静默失效、硬性规则） |
 | [legacy/README.md](./legacy/README.md) | 旧版编排器与历史探测记录（证据，不在产品路径上） |
 
