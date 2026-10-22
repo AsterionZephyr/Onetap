@@ -98,7 +98,7 @@ MENU_MIN_GAP = 4.0         # 相邻两线的像素间距下限
 # 教训：`1_ww.png` 曾同时承担「身份锚点 + 导航目标」两个职责，
 #       改掉其中一个却沿用了另一个的返回值 ⇒ 静默错点（不报错，只点错地方）。
 #
-# 正确做法（FRAMEWORK.md:433）：导航目标**程序化定位**，不用截图模板。
+# 正确做法（FRAMEWORK.md §3.7）：导航目标**程序化定位**，不用截图模板。
 # 侧栏项是「图标 + 文字」垂直排列、**行距均匀**。实测 1458x800：
 #     截图方式 y=101 / 实时触发 141 / 任务 190 / 角色代码 223 / 脚本 261
 #     / 模板 300 / 计划任务 340 / 角色设置 385 / 游戏快捷键 421
@@ -452,8 +452,8 @@ def find_sidebar_item(frame_rgb, index, log=None):
 # ==========================================================================
 # ok-ww / ok-nte 的定位逻辑**已迁到** orchestrator/apps/（docs/adr/0003）
 #
-#   ok-ww  => orchestrator/apps/ww.py   verify_identity / scan_row_button / locate_daily_row
-#   ok-nte => orchestrator/apps/nte.py  NTE_* 几何常量 + nte_cyan_mask / nte_find_* / nte_locate_start
+#   ok-ww  => orchestrator/apps/ww/__init__.py   verify_identity / scan_row_button / locate_daily_row
+#   ok-nte => orchestrator/apps/nte/__init__.py  NTE_* 几何常量 + nte_cyan_mask / nte_find_* / nte_locate_start
 #
 # 本文件只留**程序无关**的内核：模板匹配、☰ 检测、侧栏项检测（两程序共用），
 # 以及文件末尾的 __getattr__ 垫片 —— 旧调用点仍可 match.<名字>，实际取到
@@ -462,11 +462,11 @@ def find_sidebar_item(frame_rgb, index, log=None):
 
 
 # ==========================================================================
-# MaaEnd（zmd）的定位逻辑**已迁到** orchestrator/apps/zmd.py（docs/adr/0003）
+# MaaEnd（zmd）的定位逻辑**已迁到** orchestrator/apps/zmd/（docs/adr/0003）
 # ==========================================================================
-# 这里保留 re-export 垫片：旧调用点（step6 / step8 / probe/*selfcheck）
+# 这里保留 re-export 垫片：旧调用点（step6 / probe/*selfcheck 等）
 # 仍可以 match.zmd_locate_start(...) 调用，行为完全不变。
-# **新增或修改 MaaEnd 的定位逻辑请改 apps/zmd.py，不要加回本文件。**
+# **新增或修改 MaaEnd 的定位逻辑请改 apps/zmd/，不要加回本文件。**
 from .apps.zmd import (  # noqa: E402,F401  (re-export)
     ZMD_BOTTOM_FRAC,
     ZMD_COMP_STEP,

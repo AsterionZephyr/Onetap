@@ -8,7 +8,8 @@
 
   1. **单一交接面**：step 之间**只**通过 `<run-dir>/state.json` 与若干 PNG 文件
      通信，不共享 Python 对象、不共享内存。任何一个 step 换个进程跑，结果一样。
-  2. **每个 step 可单跑**：`python -m orchestrator.steps.step6_first_frame --run-dir <dir>`
+  2. **每个 step 可单跑**：`python -m orchestrator.steps.common.step6_first_frame --run-dir <dir>`
+   （模组路径由**程序自己的清单**决定，见 `steps/chain.py` 与 `main.py --list`）
      读上一节写下的 state.json，自己做完这一节，再写回 state.json。
      **不要求前面的 step 在同一个进程里跑过**。
   3. **起点可注入**：`--adopt-hwnd` / `--adopt-frame` 允许你把"上一节的结果"
@@ -55,6 +56,11 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 DEFAULT_RUN_ROOT = os.path.join(ROOT, "logs", "runs")
+
+# 链条是**属于程序**的（docs/adr/0005）：节点清单在 apps/<key>/nodes/__init__.py，
+# 本模块只按清单算「这一步该跑哪个模组」。chain 是叶子模块（只 import importlib），
+# 不会与本模块成环。
+from . import chain  # noqa: E402  (放在 ROOT 之后，便于阅读)
 
 
 # ------------------------------------------------------------------ 日志
@@ -484,7 +490,7 @@ def make_log(run_dir, step_id):
     return Log(os.path.join(run_dir, f"step{step_id}.log"))
 
 
-def run_step(step_id, name, body, extra_args=None):
+def run_step(step_id, name, body, extra_args=None, chain_key=None):
     """step 脚本的统一外壳。
 
     body(args, state, log) -> (status, data, note)
@@ -493,9 +499,20 @@ def run_step(step_id, name, body, extra_args=None):
     extra_args(ap)：可选钩子，给该 step 挂自己的专属参数
     （例如 step6 的 --adopt-frame）。这样每个 step 脚本不必重写 argparse 外壳，
     公共参数（--run-dir / --dry-run / --new-run）也保证一致。
+
+    chain_key：**程序专属节点**必传，值为该程序的 key（apps/<key>/nodes/*.py）。
+    共用节点（steps/common/*.py）不传 —— 它服务所有程序，程序从 state.json /
+    --target 解析。传了就是一道自检：解析出的程序必须恰好是它，且该程序的
+    链条里必须真有「节点 step_id + 档名 name」。对不上就**拒绝执行** ——
+    跑下去会用错程序的定位链，且是静默的（不报错，只给错误结论）。
     """
+    step_id = str(step_id)
+    # usage 里显示哪个模组：parse 之前只有 chain_key 可依赖。
+    stem = f"step{step_id}_{name}"
+    mod_hint = (f"orchestrator.apps.{chain_key}.nodes.{stem}" if chain_key
+                else f"orchestrator.steps.common.{stem}")
     ap = argparse.ArgumentParser(
-        prog=f"python -m orchestrator.steps.step{step_id}_{name}",
+        prog=f"python -m {mod_hint}",
         description=f"节点 {step_id}：{name}")
     add_common_args(ap)
     if extra_args:
@@ -506,6 +523,10 @@ def run_step(step_id, name, body, extra_args=None):
     log = make_log(run_dir, step_id)
     try:
         state = RunState.load(run_dir, must_exist=False)
+        prog = resolve_program(state, args, log=log)
+        mod = _require_node(prog, step_id, name, chain_key, log)
+        if mod is None:
+            return 2
         if args.dry_run:
             state.set("dry_run", True)
         state.begin(step_id, name, log)
@@ -518,8 +539,7 @@ def run_step(step_id, name, body, extra_args=None):
             state.finish(step_id, "failed", {"error": f"{type(e).__name__}: {e}"},
                          log, note=f"{type(e).__name__}: {e}")
             log(f"\n[结果] 节点 {step_id} FAILED —— 只改这一份代码然后重跑本命令即可：")
-            log(f"  python -m orchestrator.steps.step{step_id}_{name} "
-                f"--run-dir \"{run_dir}\"")
+            log(f"  python -m {mod} --run-dir \"{run_dir}\"")
             return 2
         state.finish(step_id, status, data, log, note=note)
         state.set("last_step", str(step_id))
@@ -528,49 +548,44 @@ def run_step(step_id, name, body, extra_args=None):
         # "skipped" 是**按参数主动跳过**，不算失败 —— 链条应当继续。
         if status not in ("ok", "skipped"):
             log(f"\n[结果] 节点 {step_id} {status.upper()} —— 可单独修改并重跑本命令：")
-            log(f"  python -m orchestrator.steps.step{step_id}_{name} "
-                f"--run-dir \"{run_dir}\"")
+            log(f"  python -m {mod} --run-dir \"{run_dir}\"")
             return 3
         log(f"\n[结果] 节点 {step_id} {status.upper()}")
-        nxt = next_step_hint(step_id)
-        if nxt.startswith("("):
+        nxt = chain.next_of(prog.key, step_id)
+        if nxt is None:
             log("  这是链条的最后一节。")
         else:
-            log(f"  下一步：python -m orchestrator.steps.{nxt} "
+            log(f"  下一步：python -m {chain.module(prog.key, nxt)} "
                 f"--run-dir \"{run_dir}\"")
         return 0
     finally:
         log.close()
 
 
-STEP_ORDER = ["1", "2", "4", "5", "6", "7", "8", "9"]
+def _require_node(prog, step_id, name, chain_key, log):
+    """校验「本入口文件 + 本节点」确实在该程序的链条里；返回该跑哪个模组。
 
-STEP_NAMES = {
-    "1": "check_admin",
-    "2": "launch",
-    "4": "wait_second_layer",
-    "5": "wait_ready",
-    "6": "first_frame",
-    "7": "foreground",
-    "8": "run_task",
-    "9": "cleanup",
-}
-
-
-def next_step_hint(step_id):
-    try:
-        i = STEP_ORDER.index(str(step_id))
-    except ValueError:
-        return "step1_check_admin"
-    if i + 1 < len(STEP_ORDER):
-        n = STEP_ORDER[i + 1]
-        return f"step{n}_{STEP_NAMES[n]}"
-    return "(链条结束)"
-
-
-def step_module(step_id):
-    n = str(step_id)
-    return f"orchestrator.steps.step{n}_{STEP_NAMES[n]}"
+    链条**属于程序**（docs/adr/0005）：同一个档名在不同程序下可能是共用骨架，
+    也可能是程序专属实现；某个程序还可能压根没有这一节。所以每次执行都查一遍
+    清单，而不是相信文件名 —— 用错程序的定位链是静默的错误（不报错，只给错误结论）。
+    """
+    if chain_key is not None and chain_key != prog.key:
+        log(f"[!!] 本文件属于程序 {chain_key}，但运行目录/--target 指向 {prog.key}")
+        log("     拒绝执行 —— 否则会用错程序的定位链（静默给出错误结论）")
+        log(f"     要跑 {chain_key}：python -m orchestrator.steps.main "
+            f"--target {chain_key} --only {step_id}")
+        return None
+    node = chain.by_id(prog.key, step_id)
+    if node is None:
+        log(f"[!!] 程序 {prog.key} 的节点链里没有节点 {step_id}"
+            f"（它有：{', '.join(chain.ids(prog.key))}）")
+        return None
+    if node.name != f"step{step_id}_{name}":
+        log(f"[!!] 程序 {prog.key} 的节点 {step_id} 是 {node.name}，"
+            f"不是本文件的 step{step_id}_{name}")
+        log(f"     清单见 orchestrator/apps/{prog.key}/nodes/__init__.py")
+        return None
+    return chain.module(prog.key, node)
 
 
 def copy_into_run(state, src, tag):

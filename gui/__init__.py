@@ -9,9 +9,9 @@
       __main__.py    入口：python -m gui
 
 设计依据：
-  - [docs/GUI-DEPENDENCY-DECISION.md](../docs/GUI-DEPENDENCY-DECISION.md)（选型）
-  - [STEPS-README.md](../STEPS-README.md)（节点链与 state.json 契约）
-  - [GUI-README.md](../GUI-README.md)（使用手册）
+  - [docs/docs/adr/0004-gui-toolkit-tkinter-over-web.md](../docs/docs/adr/0004-gui-toolkit-tkinter-over-web.md)（选型）
+  - [RUNBOOK.md.md](../RUNBOOK.md.md)（节点链与 state.json 契约）
+  - [docs/GUI.md](../docs/GUI.md)（使用手册）
 
 **本 GUI 不 import 任何 orchestrator 业务模块。** 它只做三件事：
 读文件、写文件、起子进程。这样即使某个节点文件语法坏了，GUI 照样能开起来

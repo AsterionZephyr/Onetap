@@ -3,7 +3,7 @@
 设计取向：**主控不含任何业务逻辑**。它只做三件事：
 
     1. 建一个运行目录（state.json 就在里面）
-    2. 用 `subprocess` 依次调用 `python -m orchestrator.steps.stepN_xxx`
+    2. 用 `subprocess` 依次调用该程序链条上的节点模组（`--list` 可看全表）
     3. 看退出码决定是否继续
 
 **为什么用子进程而不是 import**：子进程才能真正做到"断点"——
@@ -19,13 +19,13 @@
 
 `--keep-going` 可以让它在某节失败后继续跑后面的（调试用，通常没意义）。
 
-用法：
+用法（`--from/--to/--only` 里的编号指**该程序自己的**节点编号，见 `--list`）：
 
     python -m orchestrator.steps.main --dry-run         # 只校验与定位
     python -m orchestrator.steps.main                   # 完整执行
     python -m orchestrator.steps.main --from 6          # 从节点 6 接着跑
     python -m orchestrator.steps.main --only 8          # 只跑节点 8
-    python -m orchestrator.steps.main --list            # 只列链条
+    python -m orchestrator.steps.main --list            # 按程序列出各条链
 """
 
 import argparse
@@ -38,6 +38,7 @@ from .. import programs
 from .. import targets
 from .. import watchdog
 from .. import window
+from . import chain
 from . import context
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -48,20 +49,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # 见 watchdog 模块 docstring 关于「为什么 step 内部超时不够」的说明。
 RUN_TIMEOUT = 1800.0
 
-# 链条定义：节点号 -> (模块名, 中文名, 一句说明)
-CHAIN = [
-    ("1", "step1_check_admin", "提权检查", "非管理员直接中止（INV-7）"),
-    ("2", "step2_launch", "启动目标程序", "拉起第一层，它自行启动第二层"),
-    ("4", "step4_wait_second_layer", "等待窗口出现",
-     "窗口持有者出现（ww/nte=第二层 Qt；zmd=单层 Tauri）"),
-    ("5", "step5_wait_ready", "等待窗口就绪", "标题完整 + 尺寸达标 + 采样稳定"),
-    ("6", "step6_first_frame", "抓首帧并校验", "INV-1/13/17/22 + 身份校验"),
-    ("7", "step7_foreground", "置前台", "INV-8/22/23 的前置关"),
-    ("8", "step8_run_task", "任务循环", "导航->定位->点击->验证->等待完成"),
-    ("9", "step9_cleanup", "退出与清理", "正常完成不杀；超时/失败才杀"),
-]
-
-STEP_IDS = [c[0] for c in CHAIN]
+# 链条**不属于主控**：每个程序在自己的 `apps/<key>/nodes/__init__.py` 里声明
+# （docs/adr/0005）。节点数量、编号、顺序、每节用哪份实现都随程序而定 ——
+# 所以这里没有全局的 CHAIN / STEP_IDS，一切经 steps/chain.py 读清单。
 
 # 每节可透传给 step 脚本的额外参数：(主控参数名, 目标节点, 传给 step 的旗标)
 # 主控自己**不解释**这些参数，只做转发；None 表示内容为空时不转发。
@@ -91,7 +81,7 @@ def build_parser():
     p.add_argument("--resume", action="store_true",
                    help="沿用手工 --run-dir 或最近一次的运行目录")
     p.add_argument("--from", dest="from_step", default=None, metavar="N",
-                   help=f"从节点 N 开始（{','.join(STEP_IDS)}）")
+                   help="从该程序的节点 N 开始（编号见 --list）")
     p.add_argument("--to", dest="to_step", default=None, metavar="N",
                    help="跑到节点 N 为止（含）")
     p.add_argument("--only", default=None, metavar="N",
@@ -154,22 +144,27 @@ def build_parser():
     return p
 
 
-def selected_steps(args):
-    """按 --only / --from / --to 算出要跑的节点序列。"""
-    if args.only:
-        ids = [str(args.only)]
-        if ids[0] not in STEP_IDS:
-            raise SystemExit(f"--only {args.only} 不在链条中：{STEP_IDS}")
-        return ids
+def selected_steps(args, key):
+    """按 --only / --from / --to 从**该程序自己的**链条里算出要跑的节点序列。
 
-    ids = list(STEP_IDS)
+    ⚠️ 入参是程序 key，不是一份全局编号表：每个程序可以有自己的节点集合
+    （MaaEnd 的 5/6 是专属实现，别处没有），同一个编号在不同程序里可能不存在。
+    所以「第几节」只能对着程序自己的清单算。
+    """
+    ids = chain.ids(key)
+    if args.only:
+        want = str(args.only)
+        if want not in ids:
+            raise SystemExit(f"--only {want} 不在 {key} 的链条中：{ids}")
+        return [want]
+
     if args.from_step:
-        if args.from_step not in STEP_IDS:
-            raise SystemExit(f"--from {args.from_step} 不在链条中：{STEP_IDS}")
+        if args.from_step not in ids:
+            raise SystemExit(f"--from {args.from_step} 不在 {key} 的链条中：{ids}")
         ids = ids[ids.index(args.from_step):]
     if args.to_step:
-        if args.to_step not in STEP_IDS:
-            raise SystemExit(f"--to {args.to_step} 不在链条中：{STEP_IDS}")
+        if args.to_step not in ids:
+            raise SystemExit(f"--to {args.to_step} 不在 {key} 的链条中：{ids}")
         ids = ids[:ids.index(args.to_step) + 1]
     return ids
 
@@ -197,23 +192,40 @@ def step_specific_args(args, step_id):
     return out
 
 
-def print_chain(args):
-    print("链条（README §5 的编排流程）：")
+def print_chain(picked=None):
+    """按程序逐份打印链条（`--list`）。
+
+    ⚠️ 链条属于程序：节点数量、编号都不必一致，所以不做「一张总表」。
+    """
+    keys = list(picked) if picked else [p.key for p in programs.ALL]
+    print("节点链是**属于程序的**（docs/adr/0005）：每个程序在自己的")
+    print("apps/<key>/nodes/__init__.py 里声明它要跑哪几节。")
+    for key in keys:
+        prog = programs.get(key)
+        nodes = chain.chain(key)
+        print()
+        print(f"── {prog.display}（{key}）：{len(nodes)} 节 "
+              f"[{' '.join(n.sid for n in nodes)}]")
+        for n in nodes:
+            star = "★" if n.has_args else " "
+            kind = "共用" if n.shared else "专属"
+            print(f"  [{n.sid}] {star} {n.label:14s} {kind}  "
+                  f"{chain.module(key, n)}")
+            if n.why:
+                print(f"          {n.why}")
     print()
-    for sid, mod, name, why in CHAIN:
-        print(f"  [{sid}] {name:14s} {mod:28s} {why}")
-    print()
+    print("  ★ = 这一节有程序专属参数（细节见该节点模组的 -h）")
     print("  （无节点 3：实机复核证明「跨过第一层」不存在）")
 
 
 def run_one(args, log, prog, run_dir, ids):
     """跑**一个**程序的完整链条。
 
-    返回 (results, watchdog_fired)。`both` 模式会对 ok-ww 与 ok-nte 各调一次。
+    返回 (results, watchdog_fired)。多程序（`--target all` 等）时**每个程序各调一次**。
 
-    ⚠️ 抽成函数的原因：`--target both` 要求两个程序**先后各跑一遍完整链条**，
-    而不是把两个程序的节点混在一条链里 —— 它们的节点序列不同、
-    state.json 里的 program 只能存一个值。抽出来才能干净地跑两轮。
+    ⚠️ 抽成函数的原因：多程序要求**先后各跑一遍各自的完整链条**，而不是把
+    两个程序的节点混在一条链里 —— 它们的节点序列不同（数量也可能不同）、
+    state.json 里的 program 只能存一个值。抽出来才能干净地跑多轮。
     """
     # --- 逐节执行 -----------------------------------------------------
     # 整轮墙钟上限（用户裁定：半小时，到点关窗口 + 关游戏）。
@@ -230,8 +242,13 @@ def run_one(args, log, prog, run_dir, ids):
 
     results = []
     for sid in ids:
-        mod = dict((c[0], c[1]) for c in CHAIN)[sid]
-        name = dict((c[0], c[2]) for c in CHAIN)[sid]
+        node = chain.by_id(prog.key, sid)
+        if node is None:
+            raise SystemExit(
+                f"程序 {prog.key} 的链条里没有节点 {sid}"
+                f"（它有：{', '.join(chain.ids(prog.key))}）")
+        mod = chain.module(prog.key, node)
+        name = node.label
 
         # --- 到点检查 ---------------------------------------------------
         if deadline.seconds > 0 and not args.no_watchdog and deadline.expired():
@@ -250,8 +267,7 @@ def run_one(args, log, prog, run_dir, ids):
             _report_after_timeout(prog, log)
             break
 
-        cmd = [args.python, "-m", f"orchestrator.steps.{mod}",
-               "--run-dir", run_dir]
+        cmd = [args.python, "-m", mod, "--run-dir", run_dir]
         if args.dry_run:
             cmd.append("--dry-run")
         cmd.extend(step_specific_args(args, sid))
@@ -308,7 +324,7 @@ def run_one(args, log, prog, run_dir, ids):
 
             log(f"[主控] 节点 {sid} 未通过 —— 链条在此停手")
             log(f"  => 修好代码后**只重跑这一节**：")
-            log(f"     python -m orchestrator.steps.{mod} --run-dir \"{run_dir}\"")
+            log(f"     python -m {mod} --run-dir \"{run_dir}\"")
             log(f"  => 全链续跑：")
             log(f"     python -m orchestrator.steps.main --resume --run-dir \"{run_dir}\" --from {sid}")
             if not args.keep_going:
@@ -369,18 +385,23 @@ def main(argv=None):
             raise SystemExit(f"[--target] {e}")
 
     if args.list:
-        print_chain(args)
+        print_chain(picked)
         return 0
 
-    ids = selected_steps(args)
+    # 拼错的节点号在**开跑前**报出来 —— 别等建好运行目录、跑完前几节才发现。
+    for key in picked or []:
+        selected_steps(args, key)
 
     if picked and len(picked) > 1:
-        return run_multi(args, ids, picked)
+        # 每轮按**自己的**链条算节点序列：各程序的编号集合可以不同，
+        # 所以不能在这里算一份发给所有轮（见 selected_steps）。
+        return run_multi(args, picked)
 
-    return run_single(args, ids)
+    # 单程序：链条要等 prog 解析出来（它可能来自 state.json）才知道，见 run_single。
+    return run_single(args)
 
 
-def run_multi(args, ids, order):
+def run_multi(args, order):
     """按 `order` 逐个程序各跑一轮完整链条。
 
     任一程序失败不影响后面的继续（用户裁定：可无人值守）。
@@ -414,7 +435,7 @@ def run_multi(args, ids, order):
         log(f"# 运行目录 {sub_dir}")
         log("#" * 74)
         t0 = time.time()
-        rc = run_single(sub, selected_steps(sub))
+        rc = run_single(sub)
         dt = time.time() - t0
         overall.append((key, prog.display, rc, dt))
         log(f"\n[串联] {prog.display} 结束，退出码 {rc}，用时 {dt:.0f}s")
@@ -448,7 +469,7 @@ def run_multi(args, ids, order):
         log(f"  [注意] 仍有 {left} 个进程存活。按 Q3 正常完成不主动杀；")
         log(f"         要清干净请跑：python -X utf8 -m orchestrator.steps.main "
             f"--target {','.join(order)} --pre-clean")
-        log(f"         （或对单一程序跑 step9_cleanup --force）")
+        log(f"         （或对单一程序单独跑它的清理节点：--only 9）")
     else:
         log(f"  [OK] {len(order)} 个程序及其游戏均已自行退干净")
     log("=" * 74)
@@ -461,7 +482,7 @@ def run_multi(args, ids, order):
     return 0
 
 
-def run_single(args, ids):
+def run_single(args):
     # --- 运行目录 -----------------------------------------------------
     if args.run_dir and not args.resume:
         run_dir = os.path.abspath(args.run_dir)
@@ -489,6 +510,9 @@ def run_single(args, ids):
         state.set("program", prog.key)
         state.save()
 
+    # 节点序列按**这个程序自己的**链条算（prog 可能来自 state.json）。
+    ids = selected_steps(args, prog.key)
+
     log("=" * 74)
     log("断点式编排主控")
     log(f"运行目录 {run_dir}")
@@ -497,9 +521,9 @@ def run_single(args, ids):
     log(f"解释器   {args.python}")
     log("=" * 74)
     log("\n链条：")
-    for sid, mod, name, why in CHAIN:
-        mark = ">>" if sid in ids else "  "
-        log(f" {mark} [{sid}] {name:14s} {why}")
+    for node in chain.chain(prog.key):
+        mark = ">>" if node.sid in ids else "  "
+        log(f" {mark} [{node.sid}] {node.label:14s} {node.why}")
 
     if args.dry_run:
         state.set("dry_run", True)
@@ -510,13 +534,16 @@ def run_single(args, ids):
         # ⚠️ 清理必须针对**本次的目标程序**：清理 ok-ww 却跑 ok-nte 会
         # 把没在用的那个程序的残留当成本次前提，且真正该清的没清。
         log(f"\n[前置清理] 独占式前提：清掉 {prog.display} 残留进程")
-        cmd = [args.python, "-m", "orchestrator.steps.step9_cleanup",
-               "--run-dir", run_dir, "--force"]
-        if args.dry_run:
-            cmd.append("--dry-run")
-        r = subprocess.run(cmd, cwd=context.ROOT)
-        if r.returncode != 0:
-            log(f"  [警告] 前置清理返回 {r.returncode}（继续）")
+        mod9 = chain.module_of(prog.key, "9")
+        if mod9 is None:
+            log(f"  [警告] {prog.display} 的链条里没有「清理」这一节 —— 跳过前置清理")
+        else:
+            cmd = [args.python, "-m", mod9, "--run-dir", run_dir, "--force"]
+            if args.dry_run:
+                cmd.append("--dry-run")
+            r = subprocess.run(cmd, cwd=context.ROOT)
+            if r.returncode != 0:
+                log(f"  [警告] 前置清理返回 {r.returncode}（继续）")
 
     results, watchdog_fired = run_one(args, log, prog, run_dir, ids)
 

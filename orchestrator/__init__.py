@@ -6,8 +6,8 @@
       -> 导航到任务页 -> 定位「每日任务/开始」 -> 点击 -> 等待完成
       -> 确认退出 / 超时清理
 
-设计约束以 [HANDOFF.md](../HANDOFF.md) 与 [FRAMEWORK.md](../FRAMEWORK.md) 为准，
-术语以 [CONTEXT.md](../CONTEXT.md) 为准，架构决策见 [docs/adr/](../docs/adr/)。
+设计约束以 [HANDOFF.md](../docs/HANDOFF.md) 与 [FRAMEWORK.md](../docs/FRAMEWORK.md) 为准，
+术语以 [CONTEXT.md](../docs/CONTEXT.md) 为准，架构决策见 [docs/adr/](../docs/adr/)。
 
 本版本相对文档的三处**实测修正**（详见各模块说明）：
 

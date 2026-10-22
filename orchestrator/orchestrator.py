@@ -11,7 +11,7 @@
 
 **节点 3「跨过第一层」已删除**：实机复核证明它不存在（见 window.py 模块说明）。
 
-任务循环的两种终止行为必须区分（HANDOFF §6）：
+任务循环的两种终止行为必须区分（VERDICT.md）：
 
     正常完成  完成帧出现（横幅 + 退出通知同帧）-> ok-ww 自行退出
     等待状态  计时器连续 180 秒冻结 -> 框架判超时，走清理路径
@@ -62,7 +62,7 @@ CLICK_RETRIES = 3             # 点击无变化后的重试整轮次数（Q8：N
 CLICK_RETRY_INTERVAL = 2.0    # 重试间隔（Q8）
 NAV_RETRIES = 3               # 导航闭环的尝试次数
 # 画面「有变化」的平均绝对差阈值：定义在 frameops（它不许 import 本文件，
-# 否则 apps/zmd.py -> frameops -> orchestrator -> match -> apps/zmd 成环）。
+# 否则 apps/zmd/__init__.py -> frameops -> orchestrator -> match -> apps/zmd 成环）。
 from .frameops import CHANGE_THRESHOLD  # noqa: E402
 
 
@@ -119,7 +119,7 @@ class Orchestrator:
     # --- 工具 ---------------------------------------------------------
 
     def shot(self, frame, tag):
-        """抓图落盘供肉眼复核（HANDOFF §9 第 5 条：只靠数字会漏掉「抓到别的窗口」）。"""
+        """抓图落盘供肉眼复核（HANDOFF.md §6 第 5 条：只靠数字会漏掉「抓到别的窗口」）。"""
         from PIL import Image
         self.shots += 1
         name = f"{self.shots:03d}-{tag}.png"

@@ -3,8 +3,8 @@
 分工：
   orchestrator/ 其余模块 = **共用内核**（抓帧、置前台、点击、窗口发现、
   九节点骨架、state.json 协议）。它**不认识任何一个具体程序**。
-  orchestrator/apps/<key>.py = 一个程序的**全部专属逻辑**（定位、身份证据、
-  终态判据、节点 8 的执行/等待）。
+  orchestrator/apps/<key>/ = 一个程序的**全部专属逻辑**（<key>/__init__.py：
+  定位、身份证据、终态判据；<key>/nodes/：该程序自己的节点清单与专属节点）。
 
 为什么这么切：三个目标的差异是结构性的（层数、窗口类、界面同构与否、完成信号
 在画面里还是日志里），不能靠配置抹平；而把它们的代码混在同一文件里，任何一次
@@ -13,8 +13,8 @@
 命名约定：模块名 = programs.Program.key（ww / nte / zmd）。
 取值一律走 get(key)（懒 import：GUI 侧不应为了列个清单就 import numpy）。
 
-⚠️ 专属模块**不得** import steps/step8_run_task —— step8 在文件末尾 re-export
-   了 apps 的名字，反着 import 会成环。
+⚠️ 专属模块**不得** import apps/<key>/nodes/step8_run_task —— 节点 8 模组在文件
+   顶部 `from .. import (...)` 取 apps/<key> 的名字，反着 import 会成环。
    对 match / verdict 的依赖只允许**共用内核**（模板匹配、☰ 检测、侧栏项检测、
    LogWindow 这类三程序共用件）；旧名字（已迁到 apps 的那些）一律经共用层的
    __getattr__ 垫片惰性取用，不要直接 import 已迁走的名字。

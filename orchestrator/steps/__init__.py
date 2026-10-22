@@ -1,36 +1,37 @@
-"""orchestrator.steps — 断点式编排：按 README §5 的节点拆成可单跑的脚本
+"""orchestrator.steps — 断点式编排：每个节点一个可单跑的脚本
 
-**为什么要拆**：原来的 `orchestrator/orchestrator.py` 是一条一气呵成的链条
-（`run()` 里顺序调用 node1..node9）。任意一环出错，都要改那个 479 行的文件、
-并从头重跑整条链，代价高且容易连带影响别的环节。
+**为什么要拆**：最初是一条一气呵成的链条（`orchestrator/orchestrator.py` 里
+顺序调用 node1..node9），任意一环出错都要改那个几百行的文件、并从头重跑整条链。
+拆开后每个节点一个独立脚本，彼此只通过 `<run-dir>/state.json` 与 PNG 通信：
+出错时只打开**那一份**代码改，改完只**重跑那一份**，其他环节原样不动。
 
-拆分后：**每个节点一个独立脚本**，彼此只通过 `<run-dir>/state.json`
-与 PNG 文件通信。于是：
+## 链条属于**程序**（docs/adr/0005）
 
-  - 出错时只打开**那一份**代码修改；
-  - 改完只**重跑那一份**（`python -m orchestrator.steps.stepN_xxx --run-dir <dir>`）；
-  - 其他环节的代码与状态**原样不动**，不受影响。
+节点清单不再写死在这里，也不写死在 main.py：每个程序在自己的
+`orchestrator/apps/<key>/nodes/__init__.py` 里用一份 `NODES` 字面量声明
+「我跑哪几节、按什么顺序、每节用哪份实现」。节点编号与数量都随程序而定 ——
+MaaEnd 有专属的 5/6，ok-ww / ok-nte 用共用骨架，将来加的程序可以完全不一样。
 
-详见 `context.py` 的模块说明（交接面契约）。
+    orchestrator/steps/chain.py     读清单：chain()/ids()/by_id()/module()/next_of()
+    orchestrator/steps/common/      程序无关的节点实现（不认识任何具体程序）
+    orchestrator/steps/main.py      按清单逐节起子进程（不解释任何业务）
 
-链条顺序（README §5）：
+查看某个程序跑哪几节：
 
-    1  提权检查              step1_check_admin
-    2  启动 ok-ww.exe        step2_launch
-    4  等待第二层窗口        step4_wait_second_layer
-    5  等待窗口就绪          step5_wait_ready
-    6  抓首帧 + 校验 + 身份   step6_first_frame
-    7  置前台 + 可用性校验    step7_foreground
-    8  任务循环（导航->定位->点击->验证->等待）  step8_run_task
-    9  退出与清理            step9_cleanup
+    python -m orchestrator.steps.main --list
 
-**没有节点 3**：实机复核证明「跨过第一层」这道关卡不存在（见 window.py 模块说明）。
+单跑一节（模组路径由程序的清单决定，见 --list；共用节点在 steps/common 下，
+程序专属节点在 apps/<key>/nodes 下）：
+
+    python -m orchestrator.steps.common.step6_first_frame --run-dir <dir> --target zmd
+    python -m orchestrator.apps.zmd.nodes.step6_first_frame --run-dir <dir>
 
 一键跑完整条链：
 
     python -m orchestrator.steps.main --pre-clean
 """
 
+from . import chain
 from . import context
 
-__all__ = ["context"]
+__all__ = ["chain", "context"]

@@ -122,7 +122,7 @@ def ensure_dpi_aware():
 # (HANDLE)-1 = 0xFFFFFFFFFFFFFFFF，被截断成 0xFFFFFFFF 传给 OpenProcessToken，
 # 于是调用**静默失败**（last error 6 = ERROR_INVALID_HANDLE），
 # is_admin() 从此**恒返回 False** —— 不提权、不报错。
-# 实测：截断句柄 False / 正确句柄 True，见 docs/_probe_win32_admin.py。
+# 实测：截断句柄 False / 正确句柄 True，见 probe/_probe_win32_admin.py。
 
 kernel32.GetCurrentProcess.argtypes = []
 kernel32.GetCurrentProcess.restype = wt.HANDLE
@@ -311,7 +311,7 @@ def set_foreground(hwnd):
     （返回 0），而且**重试同一个调用永远不会成功** —— 实测在 DSH 窗口
     处于前台时，连续 6 次全部失败；DSH 不在前台时第 1 次就成功。
 
-    因此这里按优先级依次尝试三种手段（这是 HANDOFF §5「SetForegroundWindow
+    因此这里按优先级依次尝试三种手段（这是 HANDOFF.md §2.2「SetForegroundWindow
     + 每次验证」里被漏掉的后半句）：
 
       1. 裸 SetForegroundWindow —— 最快，前台本来就是自己或无人竞争时即可；

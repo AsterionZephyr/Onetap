@@ -1,7 +1,7 @@
 """终态字符串常量 —— 无依赖的叶子模块（docs/adr/0003）。
 
 为什么要单独一个文件：
-  orchestrator/verdict.py 里定义过这五个常量，而迁移到 orchestrator/apps/zmd.py
+  orchestrator/verdict.py 里定义过这五个常量，而迁移到 orchestrator/apps/zmd/__init__.py
   的判据代码要用它们。若 apps 直接 from ..verdict import RUNNING，就形成
   verdict -> apps.zmd -> verdict 的循环 import（verdict 侧是在文件尾部 import，
   实际能跑，但顺序一变就炸），更违反「专属模块不反向依赖共用层」的约定。

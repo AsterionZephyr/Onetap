@@ -1,7 +1,7 @@
 """orchestrator.selftest — 用已落盘的帧离线自测识别链（只读）
 
 为什么需要它：「实跑」会真的点下去，而识别链的失败模式**大多是静默的**
-（HANDOFF §9 第 2 条：一个从不报错的校验器等于没有校验器）。
+（HANDOFF.md §6 第 2 条：一个从不报错的校验器等于没有校验器）。
 本模块用历史帧跑识别链，并**故意喂坏帧**验证校验器真的会失败。
 
     python -m orchestrator.selftest                      # 用内置样本帧
@@ -57,7 +57,7 @@ def check_row(frame_rgb, registry):
 
 
 def negative_controls(registry):
-    """负向对照：证明校验器**真的会失败**（HANDOFF §9 第 2 条）。"""
+    """负向对照：证明校验器**真的会失败**（HANDOFF.md §6 第 2 条）。"""
     print("\n" + "=" * 78)
     print("负向对照（一个从不报错的校验器等于没有校验器）")
     print("=" * 78)

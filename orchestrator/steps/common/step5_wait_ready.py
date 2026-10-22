@@ -1,4 +1,4 @@
-"""节点 5：等待窗口就绪（README §5 步骤 [2a] 的前置）
+"""节点 5：等待窗口就绪（程序无关的实现）
 
 **就绪 = 标题已是完整形态（含版本号）且 尺寸达到可用下限 且 连续采样稳定。**
 
@@ -9,43 +9,36 @@
 ⚠️ 实测教训：窗口出现 ≠ 界面可用。ok-nte 在窗口出现后仍显示「正在启动, 120秒后超时.」
 遮罩；ok-ww 启动后会**异步加载用户头像**，期间左上角像素随之改变。
 
-单独跑：
+## 程序差异走钩子（docs/adr/0005）
 
-    python -m orchestrator.steps.step5_wait_ready --timeout 300
+有的程序在「窗口就绪」之前还有一件**程序独有**的事要做（MaaEnd 要先等它
+的自我更新收敛，因为解压替换会在应用运行期间重启进程）。那件事不属于本
+骨架，写在该程序自己的 apps/<key>/nodes/step5_wait_ready.py 里，以
+pre_ready(state, args, log) 的形式传进来：
+
+    返回 None            -> 继续走本节点的就绪等待
+    返回 (status,data,note) -> 直接作为节点结果返回（闸门没过）
+
+闸门放在 require_hwnd **之前**：重启会换 hwnd（INV-14），等完再重新发现。
 """
 
-from .. import window
-from ..errors import DiscoveryFailure
+from ... import window
+from ...errors import DiscoveryFailure
 
-from . import context
+from .. import context
 
 
 def extra_args(ap):
     ap.add_argument("--timeout", type=float, default=window.READY_TIMEOUT,
                     help=f"等待上限（秒），默认 {window.READY_TIMEOUT:.0f}")
-    ap.add_argument("--no-update-gate", action="store_true",
-                    help="跳过目标程序的自我更新闸门（MaaEnd 专用；诊断用）")
-    ap.add_argument("--update-wait", type=float, default=1800.0,
-                    help="自我更新等待上限（秒，默认 1800；MaaEnd 实际 300MB 约 7 分钟）")
 
 
-def body(args, state, log):
-    prog = context.resolve_program(state, args, log=log)
-
-    # ★ MaaEnd 自我更新：**先等它更新完**，再谈「窗口就绪」。
-    # 解压替换发生在应用运行期间并随即重启进程，若正好落在下面的采样窗口里，
-    # 本节点只会诚实但无用地说「窗口未就绪」。闸门只读日志、不点界面。
-    # 放在 require_hwnd 之前：重启会换 hwnd（INV-14），等完再重新发现。
-    if prog.key == "zmd" and not args.no_update_gate:
-        from .. import apps as apps_mod
-        upd = apps_mod.get("zmd").zmd_update_wait(
-            state, log, max_wait=args.update_wait)
-        if upd["state"] == "timeout":
-            log(f"  [!!] 自我更新在 {args.update_wait:.0f}s 内没有收敛"
-                f"（阶段 {upd['phase']}）")
-            return "failed", {"update": upd}, \
-                f"MaaEnd 自我更新未收敛（阶段 {upd['phase']}）"
-        state.set("update_gate", upd)
+def run(state, args, log, prog, pre_ready=None):
+    """等窗口就绪。pre_ready 是本程序的前置闸门（可为 None）。"""
+    if pre_ready is not None:
+        fail = pre_ready(state, args, log)
+        if fail is not None:
+            return fail
 
     hwnd = context.require_hwnd(state, log=log)
     log(f"  等待就绪（最多 {args.timeout:.0f}s；"
@@ -66,6 +59,11 @@ def body(args, state, log):
             {"hwnd": hwnd, "width": st["width"], "height": st["height"],
              "left": st["left"], "top": st["top"]},
             f"就绪 {st['width']}x{st['height']}")
+
+
+def body(args, state, log):
+    prog = context.resolve_program(state, args, log=log)
+    return run(state, args, log, prog)
 
 
 if __name__ == "__main__":

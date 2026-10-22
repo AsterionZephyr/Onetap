@@ -1,6 +1,6 @@
 """orchestrator.state — 任务状态判定（框架必须自己做，不能指望 ok-ww）
 
-ok-ww 有两种**完全不同**的终止行为（HANDOFF §6、FRAMEWORK §5.8 实测十三）：
+ok-ww 有两种**完全不同**的终止行为（VERDICT.md、HISTORY A.8 实测十三）：
 
   正常完成  自行退出。日志里连续出现
             `Daily Task Completed` → `Successfully Executed Task, Exiting Game and App!`

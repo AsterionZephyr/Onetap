@@ -30,7 +30,7 @@ from . import targets as gui_targets
 from .editor import CodeEditor
 from .runner import Runner, StateWatcher, discover_run_dir_from_line
 
-# 配色：与旧骨架一致（已肉眼复核过观感，见 GUI-SKELETON-VERIFICATION.md §4）
+# 配色：与旧骨架一致（已肉眼复核过观感，见 docs/GUI.md §7.3）
 BG = "#f5f5f5"
 LOG_BG = "#1e1e1e"
 LOG_FG = "#d4d4d4"
@@ -74,7 +74,7 @@ def _short_note(note, limit=NOTE_MAX):
     """note -> **单行**摘要：折叠所有空白；超过 limit 个字符就截断加 "…"。
 
     ⚠️ 只影响**界面显示**。state.json 的 `notes` 与主控日志里的 detail
-    一律保持原文 —— COMPLETION-VERDICT 的证据链不能因为界面变短而丢东西。
+    一律保持原文 —— VERDICT.md 的证据链不能因为界面变短而丢东西。
     """
     s = " ".join(str(note).split())
     if len(s) <= limit:
@@ -143,9 +143,11 @@ class App(tk.Tk):
         self._tstate = {}
         self.python_var = tk.StringVar(value=sys.executable)
 
-        self.node_rows = {}      # 第 1 页的步骤行
-        self.pick_rows = {}      # 第 2 页的步骤行
-        self.selected = None
+        self.node_rows = {}      # 第 1 页的步骤行（属于 self._scope_key 这个程序）
+        self.pick_rows = {}      # 第 2 页的步骤行（同上）
+        self.selected = None     # 第 2 页当前打开的节点编号
+        self._scope_key = None   # 两页当前按哪个目标程序的清单建行
+        self._picked_scope = None  # self.selected 是从哪个程序载入的
 
         self._build_style()
         self._build_banner()
@@ -230,9 +232,9 @@ class App(tk.Tk):
 
         self.run_list = tk.Frame(left, bg="#ffffff")
         self.run_list.pack(fill="both", expand=True)
-        for sid, name, _mod, _why, _a in chain.STEPS:
-            self.node_rows[sid] = self._make_row(
-                self.run_list, sid, name, on_click=None)
+        # 第 1 页的行属于**当前显示的那个程序**（见 _scope_target()）。
+        self._scope_key = self._scope_target()
+        self._rebuild_rows(self.run_list, self.node_rows)
 
         # 右：日志
         right = ttk.Labelframe(page, text="输出日志", padding=4)
@@ -286,8 +288,12 @@ class App(tk.Tk):
         self.lbl_targets = ttk.Label(ctl, text="", foreground="#555")
         self.lbl_targets.pack(side="left")
         ttk.Label(ctl, text="只跑节点").pack(side="left", padx=(12, 2))
-        ttk.Combobox(ctl, textvariable=self.only_var, width=4, state="readonly",
-                     values=[""] + chain.STEP_IDS).pack(side="left")
+        # 候选 = **当前显示的那个程序**自己的节点编号（切目标时刷新，见
+        # _refresh_only_values()）：同一编号在不同程序里可能不存在。
+        self.cmb_only = ttk.Combobox(ctl, textvariable=self.only_var, width=4,
+                                     state="readonly", values=[])
+        self.cmb_only.pack(side="left")
+        self._refresh_only_values()
         ttk.Checkbutton(ctl, text="接着上次", variable=self.resume_var).pack(
             side="left", padx=(12, 0))
         # lbl_targets 是在本函数里才建的，选择器构建时它还不存在 ——
@@ -374,6 +380,8 @@ class App(tk.Tk):
             self.lbl_pick.config(text=text)
         if hasattr(self, "lbl_targets"):
             self.lbl_targets.config(text=self._targets_summary())
+        # 显示哪个程序的清单由勾选/跟随决定 —— 变了就重建节点行。
+        self._sync_scope()
 
     def _targets_summary(self):
         if self.follow_var.get():
@@ -424,8 +432,9 @@ class App(tk.Tk):
             self.chk_follow.config(state="disabled")
 
     def on_view_target(self, key):
-        """点某个目标 -> 下面的 8 行步骤切到它。None = 自动跟随当前在跑的那个。"""
+        """点某个目标 -> 两页的节点行切到它。None = 自动跟随当前在跑的那个。"""
         self._view_target = None if self._view_target == key else key
+        self._sync_scope()
         self._repaint_steps()
 
     # --- 第 2 页 ------------------------------------------------------
@@ -439,9 +448,8 @@ class App(tk.Tk):
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=6)
         self.pick_list = tk.Frame(left, bg="#ffffff")
         self.pick_list.pack(fill="both", expand=True)
-        for sid, name, _mod, _why, _a in chain.STEPS:
-            self.pick_rows[sid] = self._make_row(
-                self.pick_list, sid, name, on_click=self.on_pick)
+        self._rebuild_rows(self.pick_list, self.pick_rows,
+                           on_click=self.on_pick)
 
         right = ttk.Frame(page)
         right.grid(row=0, column=1, sticky="nsew", pady=6)
@@ -473,8 +481,8 @@ class App(tk.Tk):
 
     # --- 步骤行的构造 --------------------------------------------------
 
-    def _make_row(self, parent, sid, name, on_click=None):
-        """一行：序号（等宽，像代码行号）+ 名称 + 状态点。"""
+    def _make_row(self, parent, sid, name, has_args=False, on_click=None):
+        """一行：序号（等宽，像代码行号）+ 名称（★ = 有专属参数）+ 状态点。"""
         row = tk.Frame(parent, bg="#ffffff", bd=0, highlightthickness=0)
         row.pack(fill="x", pady=1)
 
@@ -484,7 +492,9 @@ class App(tk.Tk):
 
         body = tk.Frame(row, bg="#ffffff")
         body.pack(side="left", fill="x", expand=True, padx=(6, 2))
-        title = tk.Label(body, text=name, bg="#ffffff", anchor="w",
+        # ★ = 该节点有程序专属参数（清单里的 has_args；细节看该模组的 -h）
+        title = tk.Label(body, text=(name + " ★") if has_args else name,
+                         bg="#ffffff", anchor="w",
                          font=("Microsoft YaHei UI", 9, "bold"))
         title.pack(fill="x")
         # wraplength 是**防撑宽**的最后一道闸：没有它时 Label 的"请求宽度"
@@ -507,6 +517,137 @@ class App(tk.Tk):
                 w.configure(cursor="hand2")
 
         return info
+
+    # --- 按目标程序重建节点行 ------------------------------------------
+    #
+    # 节点链**属于程序**：同一编号在不同程序里可能不存在、文案也可能不同。
+    # 所以切换目标时整列重建，绝不复用旧行。
+
+    def _scope_target(self):
+        """两页当前显示/校验哪个程序的清单。"""
+        known = dict(TARGET_PROGRAMS)
+        t = self._effective_view_target()
+        if t in known:
+            return t
+        picked = self.selected_targets()
+        if picked:
+            return picked[0]
+        return TARGET_PROGRAMS[0][0] if TARGET_PROGRAMS else None
+
+    def _ids_of(self, key):
+        """某程序的节点编号顺序；key 为空时返回所有程序编号的并集。"""
+        keys = [key] if key else [k for k, _d in TARGET_PROGRAMS]
+        out = []
+        for k in keys:
+            for sid in chain.ids(k):
+                if sid not in out:
+                    out.append(sid)
+        return out
+
+    def _all_sids(self):
+        return set(self._ids_of(None))
+
+    def _node_row(self, key, sid):
+        """(sid, label, name, why, has_args) 或 None。"""
+        if not key:
+            return None
+        for row in chain.nodes(key):
+            if row[0] == sid:
+                return row
+        return None
+
+    def _rebuild_rows(self, parent, store, on_click=None):
+        """按 self._scope_key 的清单重建一列行（先销毁旧行）。"""
+        for child in parent.winfo_children():
+            child.destroy()
+        store.clear()
+        if not self._scope_key:
+            return
+        for sid, label, _name, _why, has_args in chain.nodes(self._scope_key):
+            store[sid] = self._make_row(parent, sid, label,
+                                        has_args=has_args, on_click=on_click)
+
+    def _refresh_only_values(self):
+        """「只跑节点」下拉的候选 = 当前程序自己的编号。"""
+        ids = self._ids_of(self._scope_key)
+        if hasattr(self, "cmb_only"):
+            self.cmb_only.config(values=[""] + ids)
+        cur = self.only_var.get().strip()
+        if cur and cur not in ids:
+            self.only_var.set("")
+
+    def _sync_scope(self):
+        """目标程序变了就重建两页的节点行，并让编辑器跟着换文件。
+
+        编辑器**绝不因切换目标丢掉未保存的修改**：脏的内容原样保留，只把
+        选择标记摘掉（_picked_scope 与当前程序不符），文件名栏说明它原属谁。
+        """
+        key = self._scope_target()
+        if not hasattr(self, "run_list"):       # 控件还没建好
+            self._scope_key = key
+            return
+        if key == self._scope_key:
+            self._refresh_only_values()
+            return
+        old = self._scope_key
+        self._scope_key = key
+        self._rebuild_rows(self.run_list, self.node_rows)
+        if hasattr(self, "pick_list"):
+            self._rebuild_rows(self.pick_list, self.pick_rows,
+                               on_click=self.on_pick)
+        self._refresh_only_values()
+        if hasattr(self, "editor") and self.selected is not None:
+            if self.editor.is_dirty():
+                self.lbl_file.config(
+                    text=f"⚠ 未保存的修改仍在编辑器里（原属 "
+                         f"{self._target_label(old)} 节点 {self.selected}）；"
+                         f"已切到 {self._target_label(key)}，点节点行会重新载入",
+                    foreground="#ef6c00")
+            else:
+                # 未保存时绝不换文件；不脏就按新程序重新载入（节点不存在时
+                # _load_node 会在文件名栏说明，并禁用保存按钮）。
+                self._load_node(self.selected)
+        self._repaint_picks()
+        self._repaint_steps()
+
+    def _repaint_picks(self):
+        for sid, info in self.pick_rows.items():
+            selected = (sid == self.selected
+                        and self._picked_scope == self._scope_key)
+            self._paint(info, self._status_of(sid), selected=selected)
+
+    def _load_node(self, sid):
+        """把该节点在**当前程序**下的文件载入编辑器（不弹任何对话框）。"""
+        key = self._scope_key
+        self.selected = sid
+        self._picked_scope = key
+        row = self._node_row(key, sid)
+        if row is None:
+            self.editor.load_text(
+                f"# {self._target_label(key)} 的链条里没有节点 {sid}\n")
+            self.lbl_file.config(
+                text=f"节点 {sid} 不在 {self._target_label(key)} 的链条里",
+                foreground="#c62828")
+            self.btn_save.config(state="disabled")
+            self.btn_revert.config(state="disabled")
+            return False
+        _sid, label, name, _why, _a = row
+        path = chain.step_file(key, row)
+        if not os.path.isfile(path):
+            self.editor.load_text(f"# 文件不存在：{path}\n")
+            self.lbl_file.config(text=f"缺失：{chain.rel(path)}",
+                                 foreground="#c62828")
+            self.btn_save.config(state="disabled")
+            self.btn_revert.config(state="disabled")
+            return False
+        self.editor.load(path)
+        nlines = self.editor.line_count()
+        self.lbl_file.config(
+            text=f"节点 {sid} · {label}（{name}）  — {chain.rel(path)}"
+                 f"  ({nlines} 行)",
+            foreground="#555")
+        self._refresh_save_buttons()
+        return True
 
     def _paint(self, info, status, note=None, selected=False):
         mark, fg, bg, label = NODE_STYLE.get(status, NODE_STYLE[None])
@@ -571,15 +712,20 @@ class App(tk.Tk):
         #   set_node(sid, status)             2nd 是状态
         #   set_node(sid, status, note)       2nd 是状态
         #   set_node(sid, name, status, note) 2nd 是名字，3rd 才是状态
-        # 新签名的 2nd 参数必是节点号（chain.BY_ID），不会与上面三种混淆。
-        if sid not in chain.BY_ID:
+        # 新签名的 2nd 参数必是节点号（chain.all_ids()），不会与上面三种混淆。
+        if sid not in self._all_sids():
             if sid in NODE_STYLE:
                 target, sid, status, note = None, target, sid, status
             else:
                 target, sid = None, target
+        # 状态挂到"当前显示的程序"下：_repaint_steps/_status_of 按
+        # self._scope_key 取，None 桶在按程序建行的视图里看不见。
+        if target is None:
+            target = self._scope_key
         self._tstate.setdefault(target, {})[sid] = (status, note)
         self._active_target = target
         self._refresh_target_dots()
+        self._sync_scope()
         self._repaint_steps()
 
     def _effective_view_target(self):
@@ -597,7 +743,7 @@ class App(tk.Tk):
         return dict(TARGET_PROGRAMS).get(tgt, tgt)
 
     def _repaint_steps(self):
-        tgt = self._effective_view_target()
+        tgt = self._scope_key
         st = self._tstate.get(tgt) or {}
         for sid, info in self.node_rows.items():
             status, note = st.get(sid, (None, None))
@@ -607,15 +753,15 @@ class App(tk.Tk):
 
     def _refresh_target_dots(self):
         """每个目标行尾的进度点：完成数 / 总数 + 聚合状态。"""
-        total = len(chain.STEPS)
         done_states = ("ok", "failed", "timeout", "skipped")
         for key, r in getattr(self, "_target_rows", {}).items():
+            total = len(self._ids_of(key))
             st = self._tstate.get(key) or {}
             states = [s for s, _n in st.values()]
             done = sum(1 for s in states if s in done_states)
             if any(s in ("failed", "timeout") for s in states):
                 mark, fg = NODE_STYLE["failed"][0], NODE_STYLE["failed"][1]
-            elif done == total and all(s == "ok" for s in states):
+            elif total and done == total and all(s == "ok" for s in states):
                 mark, fg = NODE_STYLE["ok"][0], NODE_STYLE["ok"][1]
             elif "running" in states:
                 mark, fg = NODE_STYLE["running"][0], NODE_STYLE["running"][1]
@@ -640,25 +786,8 @@ class App(tk.Tk):
                               f"放弃修改并切换到节点 {sid}？"):
                 return
 
-        self.selected = sid
-        for s, info in self.pick_rows.items():
-            self._paint(info, self._status_of(s), selected=(s == sid))
-
-        _num, name, mod, why, _a = chain.BY_ID[sid]
-        path = chain.step_file(mod)
-        if not os.path.isfile(path):
-            self.editor.load_text(f"# 文件不存在：{path}\n")
-            self.lbl_file.config(text=f"缺失：{chain.rel(path)}", foreground="#c62828")
-            self.btn_save.config(state="disabled")
-            self.btn_revert.config(state="disabled")
-            return
-
-        self.editor.load(path)
-        nlines = self.editor.line_count()
-        self.lbl_file.config(
-            text=f"节点 {sid} · {name} — {chain.rel(path)}  ({nlines} 行)",
-            foreground="#555")
-        self._refresh_save_buttons()
+        self._load_node(sid)
+        self._repaint_picks()
 
     def on_save(self):
         if not self.selected:
@@ -695,7 +824,7 @@ class App(tk.Tk):
         self.btn_revert.config(state=state)
 
     def _status_of(self, sid):
-        tgt = self._effective_view_target()
+        tgt = self._scope_key
         return (self._tstate.get(tgt) or {}).get(sid, (None, None))[0]
 
     # ------------------------------------------------------------- 运行
@@ -709,17 +838,10 @@ class App(tk.Tk):
                               f"本次运行不会包含它们。仍要运行？"):
                 return
 
-        args = []
-        if self.dry_run.get():
-            args.append("--dry-run")
-        only = self.only_var.get().strip()
-        if only:
-            args += ["--only", only]
-        if self.resume_var.get():
-            args.append("--resume")
         # 目标程序：勾几个就传几个；「跟随上次记录」则完全不传。
         # "" 必须**不传**（而不是传 "ww"）—— 否则「接着上次」续跑 ok-nte 时
         # 会被悄悄改回 ok-ww（main.py 的 --target 是覆盖语义）。
+        picked = []
         if self.follow_var.get():
             tgt = None
         else:
@@ -731,6 +853,29 @@ class App(tk.Tk):
                     "勾一个（或点「全选」），或者勾上「跟随上次记录」。")
                 return
             tgt = ",".join(picked)
+
+        # 「只跑节点 N」的编号是**每个程序自己的**：勾了多个程序时，
+        # N 必须在每一个的链条里都存在，否则 main.py 会直接 SystemExit。
+        only = self.only_var.get().strip()
+        if only and picked:
+            disp = dict(TARGET_PROGRAMS)
+            bad = [k for k in picked if only not in self._ids_of(k)]
+            if bad:
+                messagebox.showwarning(
+                    "节点号不适用",
+                    f"节点 {only} 不在 "
+                    + "、".join(disp.get(k, k) for k in bad)
+                    + " 的链条里。\n\n请改选一个这些程序都有的节点，"
+                      "或取消「只跑节点」。")
+                return
+
+        args = []
+        if self.dry_run.get():
+            args.append("--dry-run")
+        if only:
+            args += ["--only", only]
+        if self.resume_var.get():
+            args.append("--resume")
         if tgt:
             args += ["--target", tgt]
         self._active_args = list(args)
@@ -739,6 +884,7 @@ class App(tk.Tk):
         self._tstate = {}
         self._active_target = None
         self._view_target = None
+        self._sync_scope()
         self._refresh_target_dots()
         self._repaint_steps()
         self._set_target_controls(False)
@@ -814,7 +960,7 @@ class App(tk.Tk):
                 note = (rec.get("notes") or [None])[-1]
                 self.set_node(target, sid, st, note)
         last = raw.get("last_step")
-        if last and last in chain.BY_ID:
+        if last and last in self._ids_of(target):
             self.set_node(target, last, raw.get("last_status") or "ok")
 
     # ------------------------------------------------------------- 事件泵
@@ -833,7 +979,10 @@ class App(tk.Tk):
                     vis = self._vis(status)
                     self.set_node(target, sid, vis, note)
                     if status == "running":
-                        shown = chain.BY_ID.get(sid, (None, name))[1]
+                        row = self._node_row(target, sid)
+                        if row is None:
+                            row = self._node_row(self._scope_key, sid)
+                        shown = row[1] if row else name
                         self.set_current(sid, shown, "running", target=target)
                 elif kind == "finished":
                     self.on_finished(*payload)
@@ -848,7 +997,8 @@ class App(tk.Tk):
             raws = self.watcher.poll() or {}
             for target, raw in raws.items():
                 last = raw.get("last_step")
-                if last and last in chain.BY_ID and raw.get("last_status"):
+                if (last and last in self._ids_of(target)
+                        and raw.get("last_status")):
                     self.set_node(target, last, raw["last_status"])
 
         if self.nb.index(self.nb.select()) == 1:
@@ -877,12 +1027,12 @@ class App(tk.Tk):
     # ------------------------------------------------------------- 启动校验
 
     def _check_chain(self):
-        """清单与磁盘比对。**警告，不崩溃** —— GUI 必须在链条坏掉时还能开。"""
+        """各程序节点清单与磁盘比对。**警告，不崩溃** —— GUI 必须在链条坏掉时还能开。"""
         problems = chain.verify_against_disk()
         if not problems:
-            self.status("就绪 — 步骤清单与 steps/ 一致", "ok")
+            self.status("就绪 — 各程序的节点清单与磁盘一致", "ok")
         else:
-            self.status(f"⚠ 步骤清单有 {len(problems)} 处问题（见日志）", "warn")
+            self.status(f"⚠ 节点清单有 {len(problems)} 处问题（见日志）", "warn")
             for p in problems:
                 self.append_log(f"[警告] {p}", "warn")
             self.append_log("", "plain")

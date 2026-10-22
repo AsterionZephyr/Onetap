@@ -3,19 +3,30 @@
 **为什么单独一个模块**（docs/adr/0003 阶段二）：
 
     这三件事是**所有程序共用**的机制，但它们的调用方分散在：
-        ok-ww / ok-nte 的节点 8 骨架   -> steps/step8_run_task.py
-        MaaEnd 的专属实现             -> apps/zmd.py
-    若把它们留在 step8 里，apps/zmd.py 就必须 import step8 —— 既是循环 import
-    （step8 -> apps.zmd -> step8），也会让「改 MaaEnd 波及 ww/nte」重新长回来。
+        ok-ww / ok-nte 的节点 8 骨架   -> steps/common/push.py
+        MaaEnd 的专属实现             -> apps/zmd/__init__.py
+    若把它们留在节点 8 里，apps/zmd/ 就必须 import 节点 8 —— 既是循环 import
+    （节点 8 -> apps.zmd -> 节点 8），也会让「改 MaaEnd 波及 ww/nte」重新长回来。
 
-    故下沉到这里。step8 与 apps/*.py 都从这里 import，谁都不 import 谁。
+    故下沉到这里。节点 8（steps/common/push.py 与 apps/<key>/nodes/step8_run_task.py）
+    与 apps/*/ 都从这里 import，谁都不 import 谁。
     本模块**不认识任何具体程序**（不出现 "ww"/"nte"/"zmd"）。
 """
 
 import os
 
+
+def load_rgb(path):
+    """把 PNG 读成 RGB ndarray（节点 6 的离线帧与节点 8 的 --adopt-frame 共用）。"""
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(path) as im:
+        return np.asarray(im.convert("RGB"))
+
+
 # 画面「有变化」的平均绝对差阈值（原在 orchestrator.py，随 frame_changed 一起下沉）。
-# ⚠️ 不能反过来 "from .orchestrator import CHANGE_THRESHOLD"：apps/zmd.py 要 import
+# ⚠️ 不能反过来 "from .orchestrator import CHANGE_THRESHOLD"：apps/zmd/ 要 import
 #    本模块，而 orchestrator.py 会 import match，match 又会 import apps.zmd ——
 #    实测直接 ImportError: cannot import name 'ZMD_BOTTOM_FRAC' from partially
 #    initialized module。故阈值落在本叶子模块，由 orchestrator.py 反向取。

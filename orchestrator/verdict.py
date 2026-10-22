@@ -252,10 +252,10 @@ def verdict_for(program=None, text=None, still_running=False, log_window=None):
     raise ValueError(f"没有为 {prog.key} 实现终态判据；请勿回落默认值。")
 
 # ==========================================================================
-# MaaEnd（zmd）的运行判据**已迁到** orchestrator/apps/zmd.py（docs/adr/0003）
+# MaaEnd（zmd）的运行判据**已迁到** orchestrator/apps/zmd/（docs/adr/0003）
 # ==========================================================================
-# 这里保留 re-export 垫片：step8 / verdict_for / probe/*selfcheck 的
-# 旧调用点行为完全不变。**新增或修改 MaaEnd 的判据请改 apps/zmd.py。**
+# 这里保留 re-export 垫片：verdict_for / probe/*selfcheck 的
+# 旧调用点行为完全不变。**新增或修改 MaaEnd 的判据请改 apps/zmd/。**
 # 私有辅助也一并转出：probe/zmd_verdict_selfcheck.py 直接用 _zmd_hits 数证据行
 # （垫片的目的就是「旧调用点不用改」，私有名字同样适用）。
 from .apps.zmd import (  # noqa: E402,F401  (re-export)

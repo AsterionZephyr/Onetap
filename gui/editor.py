@@ -1,12 +1,12 @@
 """gui.editor — CodeEditor：行号槽 + 语法高亮 + 保存
 
-起点是 [docs/_probe_tk_editor.py](../docs/_probe_tk_editor.py)（那份实测证明了
+起点是 [probe/_probe_tk_editor.py](../probe/_probe_tk_editor.py)（那份实测证明了
 "tkinter 能做编辑器"），本文件是**生产化**版本，三处相对探针的实质改动：
 
   1. **增量高亮**。探针的全量高亮实测 O(n²)：400 行 42ms、800 行 167ms、
      2000 行 1661ms —— 800 行以上打字发涩。这里只重打**改动行 ± 上下文**，
-     成本恒定约 0.9ms，且与文件大小无关（[docs/_probe_tk_incremental.py]
-     (../docs/_probe_tk_incremental.py) 实测提速 195×，逐 tag 与全量一致）。
+     成本恒定约 0.9ms，且与文件大小无关（[probe/_probe_tk_incremental.py]
+     (../probe/_probe_tk_incremental.py) 实测提速 195×，逐 tag 与全量一致）。
 
   2. **脏标记 + 保存回写**。`is_dirty()` 供切换节点/关窗时提示，
      避免"改了没保存就切走"这种静默丢改动。
