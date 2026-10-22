@@ -4,6 +4,28 @@
 > 不回答规范与不变量（看 [FRAMEWORK.md](./FRAMEWORK.md)）、完成判定口径（看 [VERDICT.md](./VERDICT.md)）、怎么跑（看 [RUNBOOK.md](./RUNBOOK.md)）。
 > A、B 两节原为 FRAMEWORK 的 §5、§7，编号映射 **5.N → A.N**、**7.N → B.N**；C、D、E 是 0.1 版实现说明、旧编排层记录与 ok-ww 窗口事实记录的收编。
 
+## 索引
+
+| 段 | 内容 | 什么时候看 |
+| --- | --- | --- |
+| A.1 ~ A.8 | 阶段一到阶段六的原始实测：窗口持有者/DPI/提权/前台、抓图通道、图像与点击、真实点击与模板定位、启动时序与阈值、锚点歧义与等待状态 | 想知道某条不变量（INV-nn）**是怎么来的** |
+| A.9 ~ A.13 | MaaEnd 接入收官、MaaEnd 三轮实跑、**三程序串联**（FAULT #31~#37 的现场都在这一段）、MaaEnd 自我更新、第二次全绿 | 查 MaaEnd / 串联的实测数据与时间线 |
+| B.1 ~ B.3 | 提权与进程链、程序之间的过渡、清理的「血缘已断」回退 | 查 INV-7 / INV-11 / INV-42 的依据 |
+| C | 第一版实现记录（0.1.0，原 `IMPLEMENTATION-0.1.md`） | 想看**最初**是怎么搭起来的 |
+| D | 编排层实现记录（原 `ORCHESTRATION.md`；超时默认值的来历在这里） | 查编排层参数的出处 |
+| E.1 ~ E.2 | ok-ww 窗口结构与鼠标点击的事实记录（逐字附录） | 查窗口 / 点击的原始观察 |
+| F.1 ~ F.3 | 2026-10-22 节点链拆到每个程序：为什么拆 / 拆成什么样 / 怎么验证 | ADR 0003、0005 的**实施**记录 |
+| G | 轮次工作日志（原 `docs/FAULT-LOG.md` 的非故障章节，逐字迁入） | 查某一轮「当时干了什么、回归跑绿没、结果如何」 |
+
+**G 的轮次分布**（按时间轴，共 10 组）：第 1 轮 ×2、第 2 轮 ×4、第 3 轮 ×5（含续 / 续 2 / 续 3）、
+第 4 轮 ×6、第 5 轮 ×2、第 6 轮 ×2、第 7 轮 ×5。第 8 轮**没有**工作日志段
+（它的实测数据在 A.11~A.13 与本文件 A 段末尾，故障条目见 [FAULT-LOG.md](./FAULT-LOG.md)）。
+
+> **A ~ G 内部不重排、不改写。** 这些是当时的记录：后面章节会回指前面的结论，
+> 也会推翻它（例如 [FAULT-LOG.md](./FAULT-LOG.md) #9 的「结论更正」、#14 的「已废弃」）。
+> 一旦重排，这些回指就断了 —— 所以只加这张索引，不改正文。「活结论」的当前状态
+> 一律看 FAULT-LOG 索引表的「状态」列。
+
 ---
 
 ## A. 阶段实测（原 FRAMEWORK §5）
@@ -929,3 +951,487 @@ _wait_for_activity → condition.wait(timeout)
 
 代价与约束见 [ADR 0005](./adr/0005-per-program-node-chain.md)「后果」：共用节点要在 N 份清单里各写一遍，共用层改动仍需三程序回归。
 
+
+---
+
+## G. 轮次工作日志（原 `docs/FAULT-LOG.md` 的非故障章节）
+
+> 2026-10-23 从 [FAULT-LOG.md](./FAULT-LOG.md) **逐字迁入**：只做了两件事 ——
+> 迁入的章节统一降到本节下面（H3），其子标题随降；轮次标题「第 N 轮…」改成一行的粗体分隔符
+> （轮次标题在 FAULT-LOG 里留在原处当时间轴）。**正文一个字没改。**
+
+**第 1 轮（2026-10-16）**
+
+### 环境基线
+
+| 项 | 值 |
+| --- | --- |
+| ok-ww | **v3.7.4 China**（运行期间自动从 v3.7.3 升级，见下） |
+| 窗口 | hwnd 8782464 / pid 33988 / class `Qt6111QWindowIcon` |
+| 窗口 rect | (743, 297) **1458×800** |
+| 屏幕 | 2560×1440 |
+| 解释器 | D:\WORKs\Anaconda\python.exe (3.13.9)，已提权 |
+
+### 节点结果一览
+
+| 节点 | 名称 | 结果 |
+| --- | --- | --- |
+| 1 | 提权检查 | ✅ 通过 |
+| 2 | 启动 ok-ww.exe | ✅ 通过 |
+| 4 | 等待第二层窗口 | ✅ 通过 |
+| 5 | 等待窗口就绪 | ✅ 通过（1458×800） |
+| 6 | 抓首帧并校验 | ❌ **FAILED** 身份校验 score=0.3962 |
+| 7 | 置前台 | ✅ 通过（`前台 + 可用 1458x800 @743,297`） |
+| 8 | 任务循环 | ❌ **FAILED** 身份校验 score=0.4293（在导航前置关处） |
+| 9 | 退出与清理 | — 未跑 |
+
+---
+
+**第 2 轮（2026-10-16，提权 + 修复身份校验后）**
+
+### 环境基线
+
+| 项 | 值 |
+| --- | --- |
+| ok-ww | **v3.7.4 China** |
+| 窗口 | hwnd 13043768 / pid 41544 / class `Qt6111QWindowIcon` |
+| 窗口 rect | (743, 297) **1458×800** |
+| 运行目录 | `logs/runs/run-20261015-191549` |
+| 启动方式 | `Start-Process` 提权启动 GUI（后台作业方式**失败**，见 FAULT #10） |
+
+### 节点结果一览（真实全链跑通）
+
+| 节点 | 名称 | 结果 | 证据 |
+| --- | --- | --- | --- |
+| 1 | 提权检查 | ✅ 通过 | `已提权` 0.2s |
+| 2 | 启动 ok-ww.exe | ✅ 通过 | `已启动 E:\TOOLS\ScriptsGames\ok-ww\ok-ww.exe` 0.3s |
+| 4 | 等待第二层窗口 | ✅ 通过 | `第二层就绪 hwnd=13043768` 14.4s |
+| 5 | 等待窗口就绪 | ✅ 通过 | `就绪 1458x800` 4.6s |
+| 6 | 抓首帧并校验 | ✅ **通过** | **`1458x800 身份 1.0000 pos=[17,56]`** 0.8s |
+| 7 | 置前台 | ✅ 通过 | `已置前台且校验通过` 0.9s |
+| 8 | 任务循环 | ⚠️ 见下（导航已修复） | — |
+| 9 | 退出与清理 | — 未跑 | — |
+
+**节点 6 的意义**：它正是第 1 轮里 score=0.3962 失败的那个尺寸（1458×800）。
+现在 **score=1.0000，pos=[17,56]** —— 与 `find_menu_glyph` 的独立实测完全一致
+⇒ **FAULT #7/#8 修复已在真实 GUI 驱动下端到端验证通过**。
+
+---
+
+### 观测到但非故障的环境现象
+
+#### (a) 版本漂移 v3.6.7 → v3.7.3 → v3.7.4（**三层不一致**）
+
+| 来源 | 版本 |
+| --- | --- |
+| `probe/*.png` 样本帧 | **v3.6.7**（标题栏实读「OK-WW v3.6.7 China」） |
+| `templates/assets.json` 全部资产 | v3.7.3（登记） |
+| 本次运行现网 | **v3.7.4**（「关于」页可见「更新成功 v3.7.3 -> v3.7.4」） |
+
+- 身份校验**不受影响**（☰ 检测与版本无关，同一分数在升级前后一致）。
+- 但**行定位资产已过期**（见 FAULT #9），这正是 **INV-35** 的适用场景。
+- 结论：**不能再用 v3.6.7 的样本帧验收**行定位。
+
+#### (b) 抓帧抓到驱动终端本身（INV-18 的实测复现）
+
+第 1 轮中 `shots/003-task-loop-start.png` 抓到的**不是 ok-ww**，而是驱动编排的
+DSH 终端窗口（在帧内可见本对话文字）。
+
+- 遮挡者在 Win32 层面确认为 hwnd 1902702，class **`Chrome_WidgetWin_1`**（DSH 终端）。
+- 它**与 ok-ww 同为 1458×800**，故 **INV-1（尺寸）通过**；
+- 画面有文字图形，`均值RGB=(36,36,37)`，故 **INV-13（非全黑）通过**；
+- **只有 INV-12 身份校验收紧并拒绝了它。**
+
+⇒ **框架行为正确**，与 `capture.py:10-11`（INV-18）和 `match.py:147-148` 的注释
+预言一致：「内容非全黑是必要条件，不是充分条件 —— 抓到别的窗口时画面同样『健康』」。
+
+**⚠️ 这是本仓库第 2 次踩同一个坑。** `FRAMEWORK.md:1079` 记载：
+
+> **一次 2 分钟的观测是无效的**。当时 ok-ww 失去前台，抓到的是**遮挡窗口**，
+> 我甚至在截图中看到了本对话的文字。「面板稳定」是假稳定。
+
+⇒ 记录虽在，但警示位置不显眼。**同一桌面下，驱动终端与目标程序争前台是固有冲突**；
+本轮已改为**后台作业驱动 + 终端让位**。
+
+#### (c) `capture_region` 与 `grab_frame` 的调用口径
+
+`win32.capture_region` 返回 **`(bytes BGRA, w, h)` 三元组**（`win32.py:325`），
+**不是图像**；正确入口是 `capture.grab_frame(hwnd)`（`capture.py:64`），
+它做 INV-1/12/13/17/22 全套校验并返回 `Frame`（`.rgb` 为 `(h,w,3)` RGB）。
+本轮曾误用前者得到形状 `(3,)` 的数组，属**调用方错误**，非框架缺陷。
+
+---
+
+### 待澄清 / 待复测
+
+1. **`selftest` 样本帧版本落后**（**最高优先级**）：`probe/running-000.png` 等
+   出自 **v3.6.7**，用它验收行定位得出过**错误结论**。
+   应更新为当前版本抓帧，或在文件头显著标注版本与适用范围。
+2. **全屏游戏期间的完成判定**：需定策略（补采 `exit_notice` vs 进程/计时器判定）。
+   注意：即使补上 `exit_notice`，**全屏游戏期间也读不到它**。
+3. **`exit_notice` 缺失**（`orchestrator/assets.json`）：原判「唯一功能缺口」，
+   现需与第 2 项一并考虑。
+4. **`1_ww.png` 的真实出处**：身份校验与导航均已不再依赖它（**优先级最低**）。
+   其 `born_note` 声称「不受窗口尺寸影响」的依据只有 1500×1000 与 1875×1250，
+   **恰好都不含最小尺寸 1458×800** ⇒ 以偏概全。
+5. **`orchestrator/assets.json` 的 `SIDEBAR_X/Y=(16,215)` 与 `SIDEBAR_TOL`**
+   现仅作 `verify_identity` 的回退路径使用，可考虑**一并退役**。
+6. **`2_ww.png` 登记 `born_size=(1366,41)` 与实际 1823×42 不符** ⇒
+   资产元数据不可信（INV-34 同类）。
+7. **`3_ww_menu.png`（☰）与 `4_nte_menu.png` 现已无用途**：程序化检测已取代
+   固定的 ☰ 截图（INV-38 明确「不要用固定的 ☰ 截图当身份锚点」）。
+   建议在 `templates/assets.json` 标注为**已退役**，避免后续误用。
+8. **`state.json` 残留 `running`**：直接跑节点时若进程被杀，`state.json`
+   会停在 `running`（本次 `last_status=failed`、但 step8 项为 `running`）。
+   建议在链启动时清理陈旧状态，避免 GUI 显示误导。
+
+---
+
+**第 3 轮（2026-10-16 00:26 起）—— 转向 ok-nte**
+
+### 勘察结论：ok-nte 没有任何产品代码
+
+| 问题 | 实测答案 |
+| --- | --- |
+| `orchestrator/steps/` 有 ok-nte 代码吗 | **没有**。9 个 step 文件、`window.py`、`cleanup.py`、`match.py` 全都不引用 ok-nte |
+| 现有 ok-nte 代码在哪 | 只有 `probe/nte_main.py`（6070B，勘察脚本）与 `probe/nte_verdict.py`（11134B，判据） |
+| 另有 | `legacy/probe-investigation/` 下 ~70 个已废弃产物 |
+| `nte_main.py` 还能跑吗 | **不能**。它引用 `1_nte.png` / `2_nte.png`，其中 `1_nte.png` **已不存在**，`2_nte.png` 已移入 `legacy/assets/` 并标注「已弃用」 |
+
+⇒ **ok-nte「可行性已验证」是真的，但验证物是脚本，不是可复用模块。**
+
+**第 3 轮（续）—— 框架适配：目标程序表 `orchestrator/programs.py`**
+
+### 回归总览（本轮改动后）
+
+| 检查 | 结果 |
+| --- | --- |
+| 13 个模块导入（含 `gui.chain` / `gui.runner`） | ✅ |
+| `probe/_probe_menu_glyph.py` | ✅ 16/16 符合预期 |
+| `probe/_probe_nte_verdict.py` | ✅ 16/16 通过 |
+| `probe/_probe_win32_admin.py` | ✅ 全部通过 |
+| `orchestrator.selftest` **N-1**（上下翻转帧） | ✅ **失败 → 失败**（漏洞已闭） |
+| `orchestrator.selftest` N-2（纯黑帧） | ✅ 失败 → 失败 |
+| 节点 9 只读巡视 | ✅ OK，正确挡下无关 pythonw |
+
+#### 自检中**非本次引入**的既有现象（记录备查，未处理）
+
+- **N-1 已闭合**：早前「翻转帧仍被接受」的漏洞，在 `MENU_CORNER_H_FRAC`
+  相对比例判据补齐后已转 REJECT，自检现报
+  `身份校验 = 失败 INV-12: ☰ 未检出，且侧栏图标 score=0.7574 < 0.95`。
+- 三张样本帧「行定位」均失败 `INV-24: 锚点在整帧内无 >= 0.85 的匹配`
+  —— 与 `daily_row` 切片 `[:,9:72]` 的已知问题（FRAMEWORK.md:655-657
+  「v3.7.3 掉到 0.4851，须改 x=45..250」）相关，属**待复测项**。
+- **N-3**「仅每日任务四字」候选数 = 0，与 ADR 0002 记录的「2 个候选」
+  不符 —— 待澄清。
+- **N-4** 整行 score=0.6266 —— 与 INV-19（空白区不设约束力）的预期一致。
+
+**状态**：✅ 框架适配（目标程序表 + window/cleanup 参数化）已完成并通过回归。
+
+---
+
+**第 3 轮（续 2）—— 判据层接入 orchestrator（本轮完成）**
+
+### 回归总览（本轮改动后，全绿）
+
+| 检查 | 结果 |
+| --- | --- |
+| 全 `orchestrator/**/*.py` 语法 + 导入 | ✅ |
+| `probe/_probe_verdict.py`（24 项） | ✅ 全部通过 |
+| `probe/_probe_gui2_selftest.py`（30 项） | ✅ 全部通过 |
+| `probe/_probe_gui2_runner.py`（18 项） | ✅ 全部通过 |
+| `orchestrator.selftest`（ok-ww 无回归） | ✅ 身份校验 pos=(21,71) 三帧均通过；N-1/N-2 正确失败 |
+| `chain.verify_against_disk()` | ✅ 返回 `[]` |
+| ok-nte 真日志 8 个 | ✅ 7 success / 1 no_task，**无假阳性** |
+| `--target bogus` | ✅ 被 argparse 拒绝 |
+
+**真日志的关键证据**：10-08 那次判为 `success` **且**有 5 项失败 ——
+证明「只看是否完成」与「失败详情报告」**正确分离**。
+
+### 待办（ok-nte 尚未实跑）
+
+- ⏳ **ok-nte 侧尚无界面逻辑**：ok-ww 的 8a 导航 / 8b 定位 / 8c 点击 /
+  8d 验证这套**ok-nte 还没有**（判据层与框架适配已完成）。
+- ⏳ ok-nte 图像资产（侧栏、每日任务行、开始按钮）需按 INV-34/35 采集。
+- ⏳ 用户补充事实：**每日任务刷新在凌晨 4 点** ⇒ 10-16 日常尚未刷新，当前可实跑。
+
+**状态**：✅ 判据层接入 orchestrator **已完成**并通过全部回归。
+
+---
+
+**第 3 轮（续 3）—— ok-nte 首次实跑：`--target nte` 打通节点 1→5**
+
+### 实跑记录 run-20261016-011008
+
+```
+--target nte --to 5
+  [OK] 节点 1 check_admin        0.7s  已提权
+  [OK] 节点 2 launch             0.9s  已启动 E:\TOOLS\ScriptsGames\ok-nte\ok-nte.exe
+  [OK] 节点 4 wait_second_layer 69.3s  第二层就绪 hwnd=140445416
+  [OK] 节点 5 wait_ready        17.9s  就绪 1500x1000
+全部节点通过
+```
+
+**这是 ok-nte 路径的首次端到端打通**，且**全程未改动一个 ok-ww 既有行为**
+（`DEFAULT = WW` 保底）。
+
+节点 4 实测：`hwnd=140445416 pid=63196 class=Qt6112QWindowIcon 标题=[ok-nte]`
+—— 注意 **`Qt6112`**，与 ok-ww 的 `Qt6111` 不同，程序表正确区分了两者。
+节点 5 见证完整生命周期：空壳 `500x500 [ok-nte]` → 就绪 `1500x1000
+[ok-nte v1.4.14 China  - ok-nte]`。
+
+#### 版本漂移（第三次记录）
+
+**ok-nte 现为 v1.4.14**，而 `FRAMEWORK.md §0.1` 记的是 **v1.4.8**。
+按 INV-35（程序升级使资产过期）需记一笔：本轮的日志判据已实测兼容
+v1.4.14（`info_set` 三行格式未再变），但 §0.1 的对照表应更新版本号。
+
+**第 4 轮（2026-10-16 01:10 起）—— ok-nte 实机端到端首跑**
+
+### 本轮做了什么
+
+在 ok-nte **真实窗口**上执行节点 8：`--target nte --run-dir logs\runs\run-20261016-011008`，
+经程序化定位找到「开始」按钮 → **真实点击** → 等待完成 → 清理。
+
+### 结果一览
+
+| 环节 | 结果 |
+| --- | --- |
+| 节点 1 提权检查 | ✅ OK |
+| 节点 2 启动 ok-nte.exe | ✅ OK |
+| 节点 4 等待第二层 | ✅ OK 69.3s，hwnd=140445416，class **Qt6112QWindowIcon** |
+| 节点 5 等待就绪 | ✅ OK 2.8s，1500x1000 |
+| 定位「开始」按钮 | ✅ `--only-locate` 与实跑均成功，按钮窗口内 (1444,963) 78x32 |
+| **真实点击** | ✅ **成功** —— 见下 |
+| 点击生效判定 | ⚠️ 误判为「未变化」，见 **FAULT #23** |
+| 等待完成 | ⚠️ 从未生效，见 **FAULT #25** |
+| 节点 9 清理（ok-nte） | ✅ **完整验证**，只杀 ok-nte 的 pythonw，跳过 3 个无关进程 |
+
+### ★ 点击确实成功了（关键证据）
+
+落盘帧 `shots/006-no-change-try2.png` 肉眼可见 ok-nte 顶部 toast
+**「启动成功」**；ok-nte 日志随即写出：
+
+```
+LauncherTask:Game process appeared while checking launcher; treating launch as successful
+LauncherTask:Waiting for process and window HTGame.exe for up to 600s (settle_window=True)
+TaskExecutor hwnd_window:do_update_window_size ... HTGame.exe UnrealWindow real:0,0,1920,1081
+LauncherTask:Game capture is ready; activating game window
+TaskExecutor:start check_frame_and_resolution
+```
+
+⇒ 定位链 + 真实光标点击**端到端打通**（这是本轮最重要的正面结论）。
+
+### ★ 实测到的重要时序（影响超时参数）
+
+| 时刻 | 事件 |
+| --- | --- |
+| 02:03:16 | 节点 8 开始（点击前） |
+| 02:03:49 | 点击后 ok-nte 立即启动游戏 |
+| 02:04:08 | `check_frame_and_resolution` 开始，此后**静默 14 分钟** |
+| 02:18:19 | ok-nte 自己的窗口几何被更新（非本框架所为），日志恢复 |
+| 02:18:41 | 游戏进程结束，ok-nte 卡在音频重绑 |
+
+⇒ **ok-nte 从点击到真正开始做任务，实测可达 ~15 分钟**（游戏启动 + 窗口 settle）。
+
+> **更正**：本轮我显式传了 `--total-timeout 900`，一度以为默认值也是 900s。
+> 复核代码后确认**出厂默认是 `TOTAL_TIMEOUT = 1800.0`（30 分钟）**
+> （`orchestrator/orchestrator.py:53`），节点 8 的 `--total-timeout` 默认同取它
+> （实测 argparse 默认 = 1800.0）⇒ 相对实测 15 分钟**有 15 分钟余量**，
+> **无需调整**。记此更正以免后人白改参数。
+
+### 本轮创建/修改的文件
+
+- 修改 `orchestrator/steps/step8_run_task.py`（`frame_changed()` + 常量；
+  `wait_for_nte_completion(..., window_log=None)`；点击前武装 LogWindow；
+  `window.running(program=...)` 修正）
+- 修改 `orchestrator/verdict.py`（空文本 + still_running ⇒ RUNNING）
+- 新建 `probe/_probe_frame_changed.py`（FAULT #23/#24 回归，11/11）
+- 新建 `probe/_probe_logwindow_arming.py`（FAULT #25 回归，9/9）
+
+### 待办
+
+1. ~~提高 ok-nte 的 `--total-timeout`~~ —— **已核实无需改**（出厂默认 1800s，余量 15 分钟）。
+2. ~~ok-nte 等待链尚未在「正常完成」路径上实跑过一次~~ ——
+   **已于第 5 轮跑通**（run-20261016-024410，8/8 节点全过，判 SUCCESS）。
+3. 游戏中途死亡（`HTGame.exe ... ended`）是否可预防 —— 待观察。
+4. **FAULT #27 需再实跑一次确认修复**：settle 窗口加上了，但还没在
+   一次真实的 ok-nte 收尾上验证「已自行关闭游戏」真的打印出来。
+
+---
+
+**第 5 轮（2026-10-16 02:44 起）—— ok-nte 首次完整跑通**
+
+### 结果：8/8 节点全部通过（run-20261016-024410）
+
+| 节点 | 结果 | 耗时 | 说明 |
+| --- | --- | --- | --- |
+| 1 check_admin | ✅ | 0.3s | 已提权 |
+| 2 launch | ✅ | 0.3s | 已启动 ok-nte.exe |
+| 4 wait_second_layer | ✅ | 41.7s | hwnd=53414546 |
+| 5 wait_ready | ✅ | 17.1s | 就绪 1500x1000 |
+| 6 first_frame | ✅ | 14.2s | 身份 1.0000 |
+| 7 foreground | ✅ | 0.3s | 已置前台且校验通过 |
+| 8 run_task | ✅ | 524.0s | **completed** |
+| 9 cleanup | ✅ | 0.8s | 已终止 1 个 |
+
+节点 8 的判据输出：
+
+```
+汇总 success=['异象界域', '一咖舍', '日常领取', '影院约会', '喷泉签到', '异象家具', '羁遇赠礼']
+     failed=[]  skipped=['异象追猎']
+终止标记=True 日常结束=True 杀游戏=False
+```
+
+⇒ **判据层、定位链、导航、点击、等待、清理全链路首次在「正常完成」路径上贯通。**
+skipped 里的 `异象追猎` 与 FAULT #22 实测的「该行复选框未勾选」**完全吻合**，
+两条独立证据互相印证。
+
+### 本轮创建/修改的文件
+
+- 改 `orchestrator/steps/step8_run_task.py`（`import re`、`NTE_SETTLE_SECONDS`、
+  settle 段）
+- 新建 `probe/_probe_nte_settle.py`（FAULT #27 回归，15/15）
+- 新建 `logs/nte-fullrun.log`（本次全链运行日志，属运行产物不入库）
+---
+
+**第 6 轮（2026-10-16 03:51 起）—— ✅ ok-nte 真实完整跑通**
+
+### 结果：8/8 节点全过（run-20261016-035157）
+
+| 节点 | 结果 | 耗时 | 说明 |
+| --- | --- | --- | --- |
+| 1 check_admin | ✅ | 0.9s | 已提权 |
+| 2 launch | ✅ | 0.1s | 已在运行 |
+| 4 wait_second_layer | ✅ | 0.2s | 第二层就绪 |
+| 5 wait_ready | ✅ | 10.4s | 就绪 1500x1000 |
+| 6 first_frame | ✅ | 1.1s | 身份 1.0000 |
+| 7 foreground | ✅ | 0.5s | 已置前台且校验通过 |
+| 8 run_task | ✅ | 371.5s | **completed** |
+| 9 cleanup | ✅ | 1.0s | 正常完成，未杀任何进程 |
+
+ok-nte **真的把每日任务跑完了**，逐任务证据：
+
+```
+03:53:25 开始执行日常任务
+03:54:24 任务完成: 一咖舍
+03:54:50 开始任务: 影院约会  → 03:55:44 完成
+03:55:44 开始任务: 喷泉签到  → 03:57:11 完成
+03:57:11 开始任务: 异象家具  → 03:57:57 完成
+03:57:57 开始任务: 羁遇赠礼  → 03:58:44 完成
+03:58:45 结束执行日常任务
+03:58:45 Successfully Executed Task, Exiting Game and App!
+03:58:50 Trying to kill the exe {'name': 'HTGame.exe', 'pid': 53072}   ← +5.2s
+03:58:55 ok:quit app                                                   ← +10.4s
+```
+
+**本次判据**：`success=['一咖舍','影院约会','喷泉签到','异象家具','羁遇赠礼']`、
+`failed=['日常领取']`、`skipped=['异象界域','异象追猎']`。
+
+- `failed=['日常领取']` —— **判据如实报出了失败项**。这正是 FAULT #18
+  修复的价值：坏正则时代它会静默报 `failed=[]`。
+- `skipped` 两项符合预期（异象追猎复选框本就未勾选；
+  异象界域属上一轮残留）。
+
+### 本轮创建/修改的文件
+
+- 改 `orchestrator/verdict.py`（`nte_executor_paused()` / `STALLED`）
+- 改 `orchestrator/steps/step8_run_task.py`（FAULT #30 检测分支）
+- 新建 `probe/_probe_executor_pause.py`（FAULT #30 回归）
+- 新建 `probe/_probe_foreground.py`（FAULT #29 回归）
+
+---
+
+**第 7 轮（2026-10-16 04:10 起）—— ✅ FAULT #15 解决：ok-ww 也由日志判定完成**
+
+### 端到端验证：ok-ww 8/8 全过，且是**判出来的**不是超时
+
+`run-20261016-041028`（04:10:28 起跑，今日 04:00 刷新后的全新日常）：
+
+| 节点 | 结果 | 耗时 |
+| --- | --- | --- |
+| 1 check_admin | ✅ | 0.1s |
+| 2 launch | ✅ | 0.3s |
+| 4 wait_second_layer | ✅ | 41.2s（hwnd=52431698）|
+| 5 wait_ready | ✅ | 20.1s（1458x800）|
+| 6 first_frame | ✅ | 0.3s（身份 1.0000）|
+| 7 foreground | ✅ | 0.5s |
+| 8 run_task | ✅ | **317.0s completed** |
+| 9 cleanup | ✅ | 0.5s |
+
+节点 8 的关键日志：
+
+```
+[8e-预备] 已武装 ok-ww 日志窗口（点击前），目录 ...\ok-ww\...\logs，基线 8 个日志文件
++   269s  日志判据：success（出现终止标记（进程收尾））
++   269s  *** 完成 ***（ok-ww 日志终止标记）
+      终止标记=True 日常结束=True 杀游戏=False
+      阶段痕迹 24 条，末条=in
+  [OK] ok-ww 已自行关闭游戏          ← settle 宽限也判对了
+```
+
+**注意 settle 的时序**：终止标记在 `04:16:36,287`，关游戏在 `04:16:41,295`（**+5.0s**）
+—— 与 FAULT #27 实测的 ok-nte 时序**完全同型**。收尾宽限正确等到了它。
+
+**ok-ww 真的执行了日常**（本机今日）：
+
+```
+04:15:54  DailyTask:battle pass
+04:16:10  check weekly garden
+04:16:27  weekly garden already completed
+04:16:27  check discarded echo
+04:16:36  DailyTask:Daily Task Completed
+04:16:36  Successfully Executed Task, Exiting Game and App!
+```
+
+跑完后现场干净：ok-ww 进程无、游戏进程无。
+
+### 改了什么
+
+1. **`orchestrator/verdict.py`**
+   - 新增 `WW_DAILY_END = r"DailyTask:Daily Task Completed"`
+   - 新增 `WW_KILL_GAME = r"Trying to kill the exe \{[^}]*Client-Win64-Shipping\.exe"`
+   - 新增 `ww_verdict(text, still_running=False)` —— 与 `nte_verdict` **同构**，
+     只是标记名不同。**不解析逐项汇总**：实测 ok-ww 没有 ok-nte 那种
+     `DailyRoutineTask:info_set success [...]`（`DailyRoutineTask` 计数为 0），
+     照抄 ok-nte 的正则会**天天误报「未解析到汇总行」**。
+   - `verdict_for(WW)` **不再抛错**，改走 `ww_verdict`。
+     （旧的「必须抛错」断言在 `probe/_probe_verdict.py` 里**有意反转**，
+     但「未知程序必须抛错、不回落默认」这条纪律**保留**。）
+   - `LogWindow` 支持 `program=` 参数并按程序选日志目录。
+
+2. **`orchestrator/steps/step8_run_task.py`**
+   - 日志窗口**无条件武装**（原来只对 ok-nte）。
+   - `wait_for_completion` 主判据改为**日志终止标记**，画面降为补充；
+     加上与 ok-nte 同策略的收尾宽限 `NTE_SETTLE_SECONDS`。
+
+3. **新增 `probe/_probe_ww_verdict.py`**（19 项断言）：
+   合成边界用例 + **全部历史真实日志回归** + 分派/路径校验 + LogWindow 目录选择。
+
+### ⚠️ 途中我自己写出的 bug（记录以免重犯）
+
+`_logdir_for` 初版把目录名写成 `ok-<key>` **漏了 `ok-` 前缀**，
+于是得到 `...\apps\ww\working\logs` 这种**不存在的路径** ——
+而 `LogWindow` 对此**不报错**，只是永远读到空日志 ⇒ 恒返回 RUNNING/UNKNOWN。
+
+这正是我**在同一份代码的注释里刚警告过**的「静默失效」。
+修复后新增 `logdir_self_check()`（校验目录存在且非空）与
+`probe/_probe_ww_verdict.py` 里「目录名必须带 `ok-` 前缀」的断言把门。
+
+### 回归
+
+13 套探针全绿：menu glyph / nte locate / nte verdict / win32 admin /
+frame changed / logwindow arming / sidebar item / nte settle /
+verdict dispatch / watchdog / foreground / executor pause / **ww verdict**。
+`programs.self_check() == []`、`verdict.logdir_self_check() == []`。
+
+**提交**：`82bba4d feat(ww): ok-ww 改用日志判据判定终态（FAULT #15）`
+
+### 仍未做
+
+1. ok-nte 侧**未复跑**本轮改动后的全链（改动集中在 ok-ww 分支，但
+   `LogWindow` 的 `program=` 参数与无条件下武装对 ok-nte 也有影响，
+   需再跑一次确认无回归）。
+2. `NTEGame.exe`（ok-nte 的 launcher）跑完后残留，节点 9 不处理 —— 待定。
+3. **两程序串联跑一次**（用户的最终要求）尚未做。
+4. GUI 侧尚未验证（本轮全部走命令行）。
