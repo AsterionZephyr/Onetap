@@ -131,6 +131,36 @@ _Avoid_: 卡死、挂起、阻塞
 确认当前帧**确实来自目标程序**（ok-ww 或 ok-nte），而非遮挡它的其他窗口。抓图不验证身份，就会分析错误的画面。
 _Avoid_: 帧校验、来源检查
 
+### 调度
+
+**节点**：
+链条里的一节，等价于「一个独立子进程 + `state.json` 里的一段记录」。节点之间**只经 `state.json` 通信**、不共享内存，改一节不会牵连另一节。
+_Avoid_: 步骤、阶段、任务、stage
+
+**节点序号**：
+节点在**所属程序清单**里的编号（`sid`），程序内唯一。编号不连续是刻意的（没有节点 3）。
+_Avoid_: 步骤号、序号、index
+
+**节点链**：
+某个目标程序**要跑的那一串节点**。链属于程序，不是引擎的全局属性 —— 数量、编号、顺序都随程序（当前三个程序都是 8 节 1/2/4/5/6/7/8/9，但这只是当前清单，不是框架常量）。
+_Avoid_: 流程、流水线、pipeline
+
+**节点清单**：
+程序目录里 `NODES` 字面量声明的那份链（`orchestrator/apps/<key>/nodes/__init__.py`），元素为 `Node(sid, name, label, why, has_args, shared)`。它是「这个程序跑哪几节」的**唯一出处**：`--list`、主控与 GUI 都读它；`has_args=True` 表示该节点有程序专属参数（GUI 标 ★）。
+_Avoid_: 配置、注册表、chain 表
+
+**共用节点**：
+`shared=True` 的节点，实现固定在 `orchestrator/steps/common/<name>.py`，**不认识任何具体程序**。程序差异只能经**钩子参数**传入（节点 5 `pre_ready`、节点 6 `pre_frame`/`identity`/`identity_hint`、节点 8 `push.run` 的 `navigate`/`locate`/`wait`/`before_click`/`locate_note`）。改它需三程序回归。
+_Avoid_: 通用节点、公共步骤、基础节点
+
+**专属节点**：
+`shared=False` 的节点，实现固定在 `orchestrator/apps/<key>/nodes/<name>.py`，**只服务该程序**，不 import 别的程序的节点。当前 MaaEnd 的 5/6/8、ok-ww 与 ok-nte 的 8 都是专属节点。
+_Avoid_: 定制节点、私有步骤、特化节点
+
+**清单漂移**：
+清单与磁盘不一致（清单缺失/为空、编号重复、节点文件不在、目录里有清单未登记的 `step*.py`）。GUI 启动时逐程序比对并告警；`steps/chain.py` 的 `check_all()` 是引擎侧的同一项检查。
+_Avoid_: 清单错误、版本不一致
+
 ### 判定
 
 **可见锚点组合**：

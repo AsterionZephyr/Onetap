@@ -3,7 +3,7 @@
 在**进程外**、以**真实光标**、**黑盒**地操作 ok-ww、ok-nte、MaaEnd 完成日常任务。
 三个程序均为**他人项目**：本仓库只观察其窗口、只按图像定位、只发真实光标，**不改造其源码**。
 
-> 术语以 [CONTEXT.md](./CONTEXT.md) 为准（窗口持有者、匹配锚点、动作前置关、完成帧、静默失效……）。
+> 术语以 [docs/CONTEXT.md](./docs/CONTEXT.md) 为准（窗口持有者、匹配锚点、动作前置关、完成帧、静默失效……）。
 > 说话和写文档时用 CONTEXT 的词，不要另造同义词。
 
 ## 重要文档约定
@@ -15,37 +15,53 @@
 
 | 文件 / 目录 | 内容 |
 | --- | --- |
-| `HANDOFF.md` | **实现交接书**。十二条硬性规则、六类静默失效、十八个陷阱、三程序对照表 |
-| `FRAMEWORK.md` | **不变量（INV-*）+ 各阶段实测记录 + §0.1 目标程序差异一览**。断言冲突时以它为准 |
-| `COMPLETION-VERDICT.md` | **完成判定**：以 ok-ww 任务日志的阶段序列裁决 |
-| `CLEANUP.md` | **清理策略**：按进程血缘强制清理 |
-| `ORCHESTRATION.md` | 编排层实现记录与实测结果 |
-| `CONTEXT.md` | 领域术语表 |
-| `docs/adr/` | 决策记录（0001 黑盒真实光标、0002 锚点组合与联合唯一性） |
-| `orchestrator/` | **正式实现**（共用九节点链 + 每程序专项模块） |
-| `orchestrator/apps/` | **每程序专项模块**（`ww.py` / `nte.py` / `zmd.py` = 该程序的定位 + 身份证据 + 终态判据 + 节点 8 实现，三个程序已全部迁完）。**改某个程序只改这里**，见 `docs/adr/0003` |
-| `orchestrator/frameops.py` | 节点 8 的**程序无关**助手：`shot` / `frame_changed` / `finish` / `CLICK_*` 阈值（apps 与 step8 都从这里取，谁都不 import 谁） |
-| `probe/` | **一次性探测脚本**，是证据来源，不是产品代码 |
+| `docs/` | **全部文档都在这里**（根目录只留本文件与 `README.md`） |
+| `docs/FRAMEWORK.md` | **不变量（INV-*）+ 目标程序差异一览 + 链条结构**。断言冲突时以它为准 |
+| `docs/HANDOFF.md` | **实现交接书**：静默失效全表、十二条硬性规则、陷阱、模块划分、产物索引 |
+| `docs/RUNBOOK.md` | 怎么跑：GUI / 命令行参数、单节点重跑、续跑、排障 |
+| `docs/VERDICT.md` | **完成判定**（三程序终态口径）+ 日志窗口 + **清理策略** |
+| `docs/GUI.md` | GUI 手册与自检记录 |
+| `docs/CONTEXT.md` | **领域术语表**（说话和写文档用它的词，不要另造同义词） |
+| `docs/HISTORY.md` | 实测记录与历史（含 ok-ww 窗口事实记录附录） |
+| `docs/FAULT-LOG.md` | 故障流水账 |
+| `docs/adr/` | 决策记录（0001 黑盒真实光标、0002 锚点组合与联合唯一性、0003 每程序专项模块、0004 Tkinter 而非 Web、0005 节点链属于每个程序、0006 工作区目录契约） |
+| `orchestrator/` | **正式实现**：引擎（`steps/main.py` + `context.py` + `chain.py`）、共用节点（`steps/common/`）、每程序清单与专属节点（`apps/<key>/nodes/`）。**每个程序跑哪几节由它自己的 `NODES` 清单决定**，见 `docs/adr/0005` |
+| `orchestrator/apps/` | **每程序一个包**：`<key>/__init__.py`（定位 + 身份证据 + 终态判据）、`<key>/nodes/__init__.py`（**该程序自己的节点清单 `NODES`**）、`<key>/nodes/stepN_*.py`（专属节点）。**改某个程序只改这里**，见 `docs/adr/0003`、`docs/adr/0005` |
+| `orchestrator/steps/` | 引擎与**共用节点**：`main.py` 主控、`context.py` 节点契约、`chain.py` 清单读取 API、`common/` 共用骨架（节点 1/2/4/5/6/7/9，节点 8 是 `push.py`）。**这里不出现具体程序名**；程序差异经钩子参数传入 |
+| `orchestrator/frameops.py` | 节点 8 的**程序无关**助手：`shot` / `frame_changed` / `finish` / `CLICK_*` 阈值（`apps/` 与 `steps/common/push.py` 都从这里取，谁都不 import 谁） |
+| `probe/` | **一次性探测脚本**，是证据来源，不是产品代码；**79 个脚本的索引在 `probe/README.md`**，工作区契约门禁是同目录的 `probe/_check_workspace.py` |
 | `templates/` | 图像资产 + `assets.json`（图像 + 比例位置 + 出生尺寸 + 用途） |
-| `logs/` | 运行日志与抓帧落盘 |
+| `logs/` | 运行日志与抓帧落盘（**入库忽略**；保留/清理策略见 `docs/VERDICT.md`） |
 
 ## 动手前
 
-0. **三个目标程序都已接入同一条九节点链**（`--target ww|nte|zmd`，`orchestrator/programs.py:ALL` 是唯一来源）。
+0. **每个程序跑自己的一份节点链**（`--target ww|nte|zmd`，`orchestrator/programs.py:ALL` 是唯一来源）。
+   链条 = `orchestrator/apps/<key>/nodes/__init__.py` 里的 `NODES` 清单
+   （`Node(sid, name, label, why, has_args, shared)`），主控/GUI **只按清单执行**；
+   **节点数量、编号、顺序随程序**（当前 ww/nte = 1,2,4,5,6,7,8,9，只有 8 专属；
+   zmd = 1,2,4,5(专属)、6(专属)、7、8(专属)、9）。`python -X utf8 -m orchestrator.steps.main --list`
+   按程序逐份打印链条（顺序 = `ALL`）；`--only/--from/--to` 的编号指**该程序自己的**节点编号，
+   不在该程序清单里的编号直接拒绝。为什么这么拆见 `docs/adr/0005`。
    ⚠️ **串联执行顺序 = `ALL` 的声明顺序 = MaaEnd → ok-ww → ok-nte**（用户裁定）：MaaEnd 必须排第一，
    它出问题不影响后面两个应用（`run_multi` 任一轮失败仍继续下一轮）。加新程序**追加在末尾**，
    `targets.self_check()` 有一条断言守着「第一个必须是 zmd」。
-   差异一览见 `FRAMEWORK.md` §0.1；加第 N 个程序 = 加一条 `Program`（`programs.py`）+ 一个
-   `orchestrator/apps/<key>.py`（定位/判据/节点 8），再在 `step8` 的 `body()` 里分派一次。
+   差异一览见 `docs/FRAMEWORK.md` §0.1；**加第 N 个程序 = 加一条 `Program`（`programs.py`）+
+   `orchestrator/apps/<key>/__init__.py`（定位/判据）+ `orchestrator/apps/<key>/nodes/__init__.py`
+   （清单，+ 需要的专属节点文件）**；**不用改 `main.py` / `context.py` / GUI 代码**。
+   GUI 自己的目标列表在 `gui/targets.py`（解析 `programs.py`，读不到时用 FALLBACK），加程序要同步它。
    ⚠️ **MaaEnd 是单层程序**（`MaaEnd.exe` 自己持窗口，`class='Tauri Window'` 精确相等），
-   且**跑完不立刻退出**（判据不依赖进程消失）、判据只认 `zmd\debug\mxu-tauri.log`（见 `HANDOFF.md` §6.4）。
-   ⚠️ **归属规则**：改某个程序的逻辑 → 只改 `orchestrator/apps/<key>.py`；
-   改共用层（`capture`/`input`/`window`/`state`/`frameops`/`steps`）→ **必须三程序回归**，
-   清单在 `docs/adr/0003`「共用层回归清单」。专项模块**禁止** import `steps/step8_run_task`
-   （会与它的 re-export 成环）；对 `match`/`verdict` 只用共用内核，已迁走的名字经共用层
+   且**跑完不立刻退出**（判据不依赖进程消失，只看 `zmd\debug\mxu-tauri.log`，见 `docs/VERDICT.md` §5）。
+   ⚠️ **归属规则**：改某个程序的逻辑 → 只改 `orchestrator/apps/<key>/`；
+   改共用层（`capture`/`input`/`window`/`state`/`frameops`/`steps/common`）→ **必须三程序回归**，
+   清单在 `docs/adr/0003`「共用层回归清单」。**禁止跨程序分派**：程序专属节点**不得** import 别的
+   程序的节点（`orchestrator.apps.<other>.nodes.*`），共用节点里也**不得**写 `if prog.key == ...` ——
+   共用节点不认识具体程序，差异只能经钩子参数传入（节点 5 `pre_ready`、节点 6 `pre_frame`/
+   `identity`/`identity_hint`、节点 8 `push.run` 的 `navigate`/`locate`/`wait`/`before_click`/
+   `locate_note`）。程序专属节点调 `context.run_step(..., chain_key=<key>)`，程序与节点错配会被
+   `[!!]` 拒绝（rc=2，且不写 state.json）。对 `match`/`verdict` 只用共用内核，已迁走的名字经共用层
    `__getattr__` 垫片惰性取。搬完代码**必跑 `python -m pyflakes orchestrator`**：为什么要跑见
    `docs/adr/0003`「阶段三的教训」（裸名字在函数体内不会走 PEP 562 的 `__getattr__`）。
-1. **改这块代码前读 `HANDOFF.md` 的「必须遵守的约束」**（§2）。那里每一条都有实测依据，
+1. **改这块代码前读 `docs/HANDOFF.md` 的「必须遵守的约束」**（§2）。那里每一条都有实测依据，
    违反即产生**静默错误** —— 不抛异常、不返回错误码，只给错误结果。
 2. **Python 用 `D:\WORKs\Anaconda\python.exe`（3.13.9）**。
    可用：**Pillow、numpy、win32gui、win32api**；
@@ -55,7 +71,7 @@
 
 ## 会静默出错的地方（最重要）
 
-这些失效**不报错**。必须主动校验，见 `HANDOFF.md` §2.1 全表：
+这些失效**不报错**。必须主动校验，见 `docs/HANDOFF.md` §2.1 全表：
 
 - **帧尺寸 ≠ 窗口 rect** → 点偏；**帧全黑** → 白算；**抓帧坐标越界** → 静默返回全黑帧
 - **窗口被遮挡 / 抓到别的窗口** → 点空或分析错画面 ⇒ 每次抓帧后都要**身份校验**
@@ -63,7 +79,7 @@
 - **点击落在遮挡窗口上** → 操作了别的程序 ⇒ 用 `WindowFromPoint` 做**目标顶层判定**
 - **界面状态改变排版** → 坐标漂移 ⇒ **每次重新定位，绝不缓存**
 - **全屏游戏期间抓帧** → 抓到的是游戏的像素，且**所有不变量都通过** ⇒ 静默分析错画面
-- **帧坐标当 client 坐标用** → 点偏 8px；**跨运行借日志信号** → 假成功（MaaEnd 两条，见 `HANDOFF.md` §2.1 第 12~14 条）
+- **帧坐标当 client 坐标用** → 点偏 8px；**跨运行借日志信号** → 假成功（MaaEnd 两条，见 `docs/HANDOFF.md` §2.1 第 12~14 条）
 
 ## 硬性规则（摘要）
 
@@ -92,7 +108,7 @@
 `MergeEchoTask Failed找不到对话框左侧按钮`；`pywintypes.error (5, 'GetCursorPos')`；
 游戏崩溃；**第一层 exe 自行退出**（正常，不是崩溃）；ok-nte 侧栏无法展开；
 多个 `pythonw` / `msedgewebview2`；`[WinError 5] Failed to terminate process`（多半是**已经退出了**）。
-详见 `HANDOFF.md` §7 与 `CLEANUP.md` §2.2。
+详见 `docs/HANDOFF.md` §4 与 `docs/VERDICT.md` §8。
 
 ## 文件权限（附加规则，优先级最高）
 
