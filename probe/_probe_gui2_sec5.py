@@ -1,4 +1,4 @@
-"""docs/_probe_gui2_sec5.py — 只跑自检的第 5 节，带分步计时，定位卡在哪一步"""
+"""probe/_probe_gui2_sec5.py — 只跑自检的第 5 节，带分步计时，定位卡在哪一步"""
 
 import os
 import sys

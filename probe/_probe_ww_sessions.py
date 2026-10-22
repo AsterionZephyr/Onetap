@@ -40,7 +40,8 @@ for ln in lines:
     if QUIT in ln:
         cur["quit"] = True
     if "开始任务" in ln or "TaskExecutor:开始" in ln:
-        cur["tasks"] += 1    if "Trying to kill the exe" in ln:
+        cur["tasks"] += 1
+    if "Trying to kill the exe" in ln:
         cur["killed"] += 1
     if any(k in ln for k in BAD):
         cur["bad"].append(ln.strip()[:120])

@@ -7,7 +7,7 @@
 
 本探针不依赖「当前会话是否提权」，因此**提权与不提权下都应全绿**。
 
-    python docs/_probe_win32_admin.py
+    python probe/_probe_win32_admin.py
 """
 
 import ctypes

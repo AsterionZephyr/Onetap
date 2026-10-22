@@ -3,7 +3,7 @@
 本文件是一次**可行性实测**，不是最终实现。目的：把"tkinter 做编辑器又丑又别扭"
 这个断言变成可测量的数字（行数 / 是否需要第三方依赖 / 功能是否齐全）。
 
-运行：python docs/_probe_tk_editor.py
+运行：python probe/_probe_tk_editor.py
 """
 
 import keyword

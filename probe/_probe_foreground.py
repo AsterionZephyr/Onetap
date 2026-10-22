@@ -82,7 +82,7 @@ if LIVE:
     print("  ⚠️ 为什么不用 set_foreground 制造竞争：那正是被前台锁拒绝的调用，")
     print("     用它建条件等于用「假设失败的机制」去搭测试台。实测它还会连带")
     print("     干扰被测对象（同进程反复调用会互相消耗 ALT 抖动的「信用」）。")
-    print("     真鼠标点击是**唯一**能确定性拿到前台的途径（HANDOFF §5）。")
+    print("     真鼠标点击是**唯一**能确定性拿到前台的途径（HANDOFF.md §2.2 第 5 条）。")
     w = window.find_window(program=programs.NTE)
     if not w:
         print("  (ok-nte 未运行，跳过 live 段)")

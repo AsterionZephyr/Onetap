@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""诊断 N-1：上下翻转的帧里，find_menu_glyph 到底匹配到了什么。
+r"""诊断 N-1：上下翻转的帧里，find_menu_glyph 到底匹配到了什么。
 
 用法：
     & "D:\WORKs\Anaconda\python.exe" -X utf8 probe\_probe_flip_diag.py

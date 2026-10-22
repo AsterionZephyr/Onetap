@@ -1,4 +1,4 @@
-"""docs/_probe_gui2_stop.py — 单独查清楚 taskkill /T /F 之后进程到底还在不在
+"""probe/_probe_gui2_stop.py — 单独查清楚 taskkill /T /F 之后进程到底还在不在
 
 上一版自检里 "子进程确已终止" 失败，需要分辨两种可能：
   (a) 进程真的没被杀掉（产品 bug）；

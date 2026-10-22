@@ -1,6 +1,6 @@
 # capture.py — ok-ww 黑盒编排 · 阶段二抓图与校验
 #
-# 验证目标（见 FRAMEWORK.md §5.4）：
+# 验证目标（见 HISTORY A.4）：
 #   T-5 帧尺寸是否恒等于窗口 rect          -> INV-1
 #   INV-13 全黑/异常帧能否被检出并中止      -> 帧内容校验
 #   INV-12 可见性：API 说 visible 是否真的在屏幕上

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""验证 find_sidebar_item：从真实抓帧定位侧栏「任务」项。
+r"""验证 find_sidebar_item：从真实抓帧定位侧栏「任务」项。
 
 真值（人眼读 002-task-loop-start.png，1458x800，ok-ww v3.7.4）：
     截图方式      y≈101

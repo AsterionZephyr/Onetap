@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from orchestrator import programs, watchdog                    # noqa: E402
-from orchestrator.steps import step9_cleanup as S9             # noqa: E402
+from orchestrator.steps.common import step9_cleanup as S9      # noqa: E402
 
 FAILED = []
 

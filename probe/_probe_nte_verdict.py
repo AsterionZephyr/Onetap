@@ -13,7 +13,7 @@ ok-nte 升级后把汇总行从「一行三段」改成「三行独立 `info_set
 
 不依赖 ok-nte 正在运行，也不需要提权 —— 纯文本解析，随时可跑。
 
-    python -X utf8 docs/_probe_nte_verdict.py
+    python -X utf8 probe/_probe_nte_verdict.py
 """
 
 import sys

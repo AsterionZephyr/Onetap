@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from orchestrator import programs, verdict, watchdog            # noqa: E402
-from orchestrator.steps import step9_cleanup as S9              # noqa: E402
+from orchestrator.steps.common import step9_cleanup as S9       # noqa: E402
 
 FAILED = []
 LOGDIR = Path(r"E:\TOOLS\ScriptsGames\ok-ww\data\apps\ok-ww\working\logs")
@@ -122,7 +122,7 @@ else:
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
         r = subprocess.run([sys.executable, "-X", "utf8", "-m",
-                            "orchestrator.steps.step9_cleanup", "--run-dir", str(d)],
+                            "orchestrator.steps.common.step9_cleanup", "--run-dir", str(d)],
                            cwd=str(ROOT), capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
         out = (r.stdout or "") + (r.stderr or "")

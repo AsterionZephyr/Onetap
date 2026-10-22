@@ -5,7 +5,7 @@ sys.path.insert(0, r"E:\TOOLS\ScriptsGames\Onetap")
 from orchestrator import verdict as V
 from orchestrator import apps
 
-# MaaEnd 的节点 8 实现已迁到 apps/zmd.py（docs/adr/0003 阶段二），
+# MaaEnd 的节点 8 实现已迁到 apps/zmd/__init__.py（docs/adr/0003 阶段二），
 # 自检直接打它 —— 若这里改成 step8，等于在验证一个已经不存在的副本。
 S = apps.get("zmd")
 

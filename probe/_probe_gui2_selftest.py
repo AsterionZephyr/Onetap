@@ -1,18 +1,18 @@
-"""docs/_probe_gui2_selftest.py — 两页 GUI 的无头自检
+"""probe/_probe_gui2_selftest.py — 两页 GUI 的无头自检
 
 逐项验证，全部留可复现输出。跑法：
 
-    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 docs\\_probe_gui2_selftest.py
+    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 probe\\_probe_gui2_selftest.py
 
 不弹窗、不点击、不启动 ok-ww。覆盖：
 
-  1. 步骤清单与 steps/ 目录一致（含与 main.py CHAIN 的比对）
+  1. 每个程序的节点清单与磁盘一致（按程序读，不再是硬编码一张表）
   2. App 无头构建 + 两页存在 + 左列确实是 1/5 weight
   3. 第 1 页：日志分级 tag、当前步骤指示
-  4. 第 2 页：点选步骤 -> 载入对应文件；保存往返一致
+  4. 第 2 页：按 (程序, 节点号) 载入对应文件；切换程序换文件；保存往返一致
   5. 编辑器增量高亮 vs 全量高亮：逐 tag 一致 + 常数时间
   6. 运行中禁止保存的守卫
-  7. 路径固定：编辑器只认 steps/ 下的文件
+  7. 路径固定：编辑器只认**当前程序清单里**的节点文件
 """
 
 import os
@@ -38,19 +38,34 @@ def check(name, ok, detail=""):
         FAIL.append(name)
 
 
+def row_of(key, sid):
+    return chain.node_of(key, sid)
+
+
 print("=" * 74)
 print("两页 GUI 无头自检")
 print("=" * 74)
 
 # ---------------------------------------------------------------- 1
-print("\n1. 步骤清单与 steps/ 一致性")
+print("\n1. 每个程序的节点清单与磁盘一致")
+keys = chain.keys()
+check("程序顺序 = programs.ALL（zmd, ww, nte）",
+      keys == ["zmd", "ww", "nte"], str(keys))
 problems = chain.verify_against_disk()
-check("清单无问题", not problems, "" if not problems else "\n     " + "\n     ".join(problems))
-check("节点号沿用原编号（无 3）",
-      chain.STEP_IDS == ["1", "2", "4", "5", "6", "7", "8", "9"],
-      str(chain.STEP_IDS))
-missing = [s for s, p in chain.all_files() if not os.path.isfile(p)]
-check("每个步骤的文件都存在", not missing, str(missing))
+check("清单无漂移", not problems,
+      "" if not problems else "\n     " + "\n     ".join(problems))
+EXPECTED_IDS = ["1", "2", "4", "5", "6", "7", "8", "9"]
+for key in keys:
+    rows = chain.nodes(key)
+    check(f"{key} 节点数 = 8", len(rows) == 8, f"{len(rows)} 节")
+    check(f"{key} 编号沿用原编号（无 3）",
+          chain.ids(key) == EXPECTED_IDS, str(chain.ids(key)))
+    missing = [r[0] for r in rows
+               if not os.path.isfile(chain.step_file(key, r))]
+    check(f"{key} 每节的文件都存在", not missing, str(missing))
+    owned = {r[0] for r in rows if not row_of(key, r[0])["shared"]}
+    want = {"5", "6", "8"} if key == "zmd" else {"8"}
+    check(f"{key} 专属节点 = {sorted(want)}", owned == want, str(sorted(owned)))
 
 # ---------------------------------------------------------------- 2
 print("\n2. App 无头构建")
@@ -59,10 +74,59 @@ app.withdraw()
 app.update()
 check("App 构建成功", True)
 check("两个页面", app.nb.index("end") == 2, f"页数={app.nb.index('end')}")
-check("第 1 页步骤行数", len(app.node_rows) == len(chain.STEPS),
-      f"{len(app.node_rows)}/{len(chain.STEPS)}")
-check("第 2 页步骤行数", len(app.pick_rows) == len(chain.STEPS),
-      f"{len(app.pick_rows)}/{len(chain.STEPS)}")
+scope = app._scope_key
+check("初始显示范围是目标程序之一", scope in keys, str(scope))
+rows = chain.nodes(scope)
+check("第 1 页步骤行数 = 当前程序节点数",
+      len(app.node_rows) == len(rows), f"{len(app.node_rows)}/{len(rows)}")
+check("第 2 页步骤行数 = 当前程序节点数",
+      len(app.pick_rows) == len(rows), f"{len(app.pick_rows)}/{len(rows)}")
+check("行号与清单顺序一致", list(app.node_rows) == chain.ids(scope),
+      str(list(app.node_rows)))
+star_rows = [r for r in rows if r[4]]
+for r in star_rows:
+    txt = app.node_rows[r[0]]["title"].cget("text")
+    check(f"节点 {r[0]} 有专属参数 -> ★", txt.endswith("★"), txt)
+no_star = [r for r in rows if not r[4]]
+for r in no_star[:2]:
+    txt = app.node_rows[r[0]]["title"].cget("text")
+    check(f"节点 {r[0]} 无专属参数 -> 无 ★", not txt.endswith("★"), txt)
+vals = list(app.cmb_only.cget("values"))
+check("「只跑节点」候选 = 当前程序编号", vals == [""] + chain.ids(scope),
+      str(vals))
+
+# 切换目标程序：行要按新程序的清单重建，同一编号可能换文件
+other = next(k for k in keys if k != scope)
+app.on_view_target(other)
+app.update()
+check("切换程序后 _scope_key 跟随", app._scope_key == other,
+      f"{scope} -> {app._scope_key}")
+check("切换后行按新程序清单重建",
+      list(app.node_rows) == chain.ids(other), str(list(app.node_rows)))
+check("切换后「只跑节点」候选也换了",
+      list(app.cmb_only.cget("values")) == [""] + chain.ids(other))
+# 节点 5：zmd 专属、ww/nte 共用 —— 必须落到不同文件
+app._view_target = "zmd"
+app._sync_scope()
+app.on_pick("5")
+p_zmd5 = os.path.abspath(app.editor.path)
+app._view_target = "ww"
+app._sync_scope()
+app.on_pick("5")
+p_ww5 = os.path.abspath(app.editor.path)
+check("节点 5 在 zmd 是专属实现",
+      p_zmd5 == os.path.abspath(chain.step_file("zmd", "5"))
+      and os.sep + os.path.join("apps", "zmd", "nodes") + os.sep in p_zmd5,
+      chain.rel(p_zmd5))
+check("节点 5 在 ww 是共用实现",
+      p_ww5 == os.path.abspath(chain.step_file("ww", "5"))
+      and os.sep + os.path.join("steps", "common") + os.sep in p_ww5,
+      chain.rel(p_ww5))
+check("同一编号在不同程序指向不同文件", p_zmd5 != p_ww5)
+# 回到 zmd 继续后面的检查
+app._view_target = "zmd"
+app._sync_scope()
+app.update()
 
 # 左列 weight 必须是 1，右列 4  => 1/5
 w0 = app.page_run.grid_columnconfigure(0)["weight"]
@@ -125,14 +189,36 @@ _appmod.messagebox = _Quiet()
 
 app.on_pick("1")
 check("点选后 selected", app.selected == "1", str(app.selected))
-check("载入了 step1 文件",
-      app.editor.path and os.path.basename(app.editor.path) == "step1_check_admin.py",
+check("载入了 step1 共用文件",
+      app.editor.path
+      and os.path.abspath(app.editor.path)
+      == os.path.abspath(chain.step_file("zmd", "1")),
       str(app.editor.path))
 check("编辑器非空", app.editor.line_count() > 10, f"{app.editor.line_count()} 行")
 app.on_pick("8")
-check("切到节点 8 载入 step8",
-      os.path.basename(app.editor.path) == "step8_run_task.py")
-check("节点 8 是大文件", app.editor.line_count() > 300, f"{app.editor.line_count()} 行")
+check("切到节点 8 载入 zmd 的专属 step8",
+      app.editor.path
+      and os.path.abspath(app.editor.path)
+      == os.path.abspath(chain.step_file("zmd", "8")),
+      str(app.editor.path))
+check("载入的是专属目录下文件",
+      os.sep + os.path.join("apps", "zmd", "nodes") + os.sep
+      in os.path.abspath(app.editor.path), str(app.editor.path))
+check("节点 8 文件非空", app.editor.line_count() > 10,
+      f"{app.editor.line_count()} 行")
+
+# 同一节点 8 切到 ww：必须换到 ww 的专属文件（不是 zmd 的）
+zmd8 = os.path.abspath(app.editor.path)
+app._view_target = "ww"
+app._sync_scope()
+app.on_pick("8")
+ww8 = os.path.abspath(app.editor.path)
+check("节点 8 在 ww 是另一份专属文件", ww8 != zmd8
+      and ww8 == os.path.abspath(chain.step_file("ww", "8")),
+      chain.rel(ww8))
+app._view_target = "zmd"
+app._sync_scope()
+app.on_pick("8")
 
 # 保存往返：改一行 -> 存到临时副本 -> 比对
 orig = app.editor.text.get("1.0", "end-1c")
@@ -264,13 +350,26 @@ app_mod.messagebox = real_box
 app.editor.load(app.editor.path)
 
 # ---------------------------------------------------------------- 7
-print("\n7. 路径固定：编辑器只认 steps/ 下的文件")
+print("\n7. 路径固定：编辑器只认当前程序清单里的节点文件")
+app._view_target = "ww"          # ww 的节点 6 是共用实现
+app._sync_scope()
 app.on_pick("6")
 p = os.path.abspath(app.editor.path)
-check("载入路径在 steps/ 下",
-      p.startswith(os.path.abspath(chain.STEPS_DIR)), chain.rel(p))
-check("载入的是 .py",
-      p.endswith(".py"), os.path.basename(p))
+check("载入路径 == 清单算出的路径",
+      p == os.path.abspath(chain.step_file("ww", "6")), chain.rel(p))
+under_common = p.startswith(os.path.abspath(chain.COMMON_DIR))
+under_owned = p.startswith(os.path.abspath(chain.APPS_DIR))
+check("载入路径在 common/ 或 apps/ 下", under_common or under_owned,
+      chain.rel(p))
+check("载入的是 .py", p.endswith(".py"), os.path.basename(p))
+# 反例：不在当前程序清单里的编号，不能载入任何文件
+app.on_pick("3")
+check("节点 3 不在 ww 清单 -> 不载入文件", not app.editor.path
+      or app.editor.path == p)
+# ttk 的 cget("state") 在 Tk 8.6 可能返回 Tcl index 对象，统一转 str 比较
+check("节点 3 -> 保存按钮禁用",
+      str(app.btn_save.cget("state")) == "disabled",
+      str(app.btn_save.cget("state")))
 
 try:
     app.destroy()

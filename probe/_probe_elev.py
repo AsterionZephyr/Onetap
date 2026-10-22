@@ -1,7 +1,7 @@
 """检查指定 pid 的完整性级别（提权与否），并对比自己的。
 
 用法：
-    python docs/_probe_elev.py <pid>
+    python probe/_probe_elev.py <pid>
 
 输出每个进程的 TokenIntegrityLevel：
     0x2000 Medium  = 未提权

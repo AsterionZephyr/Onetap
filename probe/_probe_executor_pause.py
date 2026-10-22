@@ -222,11 +222,11 @@ check("✓ 无暂停记录 ⇒ 不判停住", got is False)
 # 常量与接线
 from orchestrator import orchestrator as orch_mod  # noqa: E402
 check("✓ orchestrator.STALLED 已定义", getattr(orch_mod, "STALLED", None) == "stalled")
-# docs/adr/0003：ok-nte 的节点 8 已迁到 orchestrator/apps/nte.py，
+# docs/adr/0003：ok-nte 的节点 8 已迁到 orchestrator/apps/nte/__init__.py，
 # result->状态码的映射在 orchestrator/frameops.py::finish。断言随之指向新位置
 # （原来是查 step8_run_task.py —— 那时这两处代码还在里面）。
 _ORCH = Path(__file__).resolve().parent.parent / "orchestrator"
-nte_app = (_ORCH / "apps" / "nte.py").read_text(encoding="utf-8")
+nte_app = (_ORCH / "apps" / "nte" / "__init__.py").read_text(encoding="utf-8")
 frameops = (_ORCH / "frameops.py").read_text(encoding="utf-8")
 check("✓ 节点 8 已接线 nte_executor_paused",
       "nte_executor_paused(window_log.text())" in nte_app)

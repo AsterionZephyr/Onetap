@@ -7,13 +7,11 @@ venv/
 
 # 运行产物：日志、抓帧落盘
 logs/
-probe-shots/
 
 # 本地快捷方式：.lnk 里写的是本机绝对路径，不入库
 *.lnk
 
-# 本机临时产物：Windows 缓存转储、工具临时目录、调试输出
-%SystemDrive%/
+# 本机临时产物：工具临时目录、调试输出
 .dsh-tmp/
 debug.log
 _pyout.txt

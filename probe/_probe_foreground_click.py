@@ -123,12 +123,19 @@ def main():
            "\u70b9\u51fb\u540e**\u91cd\u65b0\u9a8c\u8bc1** foreground\uff08\u4e0d\u53ea\u53d1\u4e00\u4e0b\u70b9\u51fb\u5c31\u5ba3\u5e03\u6210\u529f\uff09")
 
         # 必须避开右上角按钮区：x 用宽度的一部分，不能贴右边缘
-        # \u26a0\ufe0f \u6ce8\u610f\uff1a\u6e90\u7801\u5199\u7684\u662f st["width"] // 5\uff0c\u4e2d\u95f4\u5939\u7740 `"]`\u3002
-        #    \u672c\u63a2\u9488\u6700\u521d\u5199\u6210\u641c `width // 5`\uff0c\u6c38\u8fdc\u547d\u4e2d\u4e0d\u5230 \u2014\u2014 \u5df2\u4fee\u6b63\u3002
-        ck('"width"] // 5' in body_src,
-           "\u70b9\u51fb\u70b9\u6a2a\u5750\u6807\u504f\u5de6\uff08st[\"width\"] // 5\uff09\uff0c\u907f\u5f00\u53f3\u4e0a\u89d2\u6700\u5927\u5316/\u5173\u95ed\u6309\u94ae")
-        ck("min(18" in body_src,
-           "\u70b9\u51fb\u70b9\u7eb5\u5750\u6807\u9650\u5728\u7a97\u53e3\u9876\u90e8\uff08min(18,\u2026\uff09\uff0c\u907f\u5f00\u4e3b\u4f53\u63a7\u4ef6")
+        # ⚠️ 坐标生成在 2026-10-19 迁到 _activation_candidates()（为绕开遮挡），
+        #    所以这两条要查那一层，而不是 _click_to_activate 的 body。
+        cand = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_activation_candidates":
+                cand = node
+                break
+        ck(cand is not None, "存在 _activation_candidates（候选点生成器）")
+        cand_src = ast.get_source_segment(text, cand) if cand is not None else ""
+        ck('"width"] // 5' in cand_src or "w // 5" in cand_src,
+           "点击点横坐标偏左（w // 5），避开右上角最大化/关闭按钮")
+        ck("min(18" in cand_src,
+           "点击点纵坐标限在窗口顶部（min(18,…），避开主体控件")
 
         # 窗口太小时不点（避免点到奇怪的地方）
         ck('"height"] < 40' in body_src or "height < 40" in body_src,
@@ -156,6 +163,8 @@ def main():
             self.foreground_reported = False
             self.click_calls = []
             self.setfg_calls = 0
+            self.lifted = []              # raise_window 被调用的 hwnd
+            self.toplit = 0               # top_window_at 被调用的次数（逐点验证）
 
         # --- 被 ensure_foreground 用到的最小面 ---
         def window_state(self, hwnd):
@@ -173,6 +182,18 @@ def main():
             self.setfg_calls += 1
             return False                       # 永远失败 —— 模拟 FAULT #35
 
+        # --- 被 _click_to_activate 用到的最小面（HANDOFF §2.1 第 16 条：抬 Z 序 + 逐点验证）---
+        def raise_window(self, hwnd):
+            self.lifted.append(hwnd)
+            return True
+
+        def screen_size(self):
+            return (1920, 1080)
+
+        def top_window_at(self, x, y):
+            self.toplit += 1
+            return 1234                        # 候选点都落在目标窗口上
+
         def click(self, x, y):
             self.click_calls.append((x, y))
             if self.click_works:
@@ -189,6 +210,11 @@ def main():
            f"API \u786e\u5b9e\u88ab\u8bd5\u8fc7\u591a\u6b21\uff08{3} \u6b21\uff09\u624d\u9000\u5230\u70b9\u51fb")
         ck(len(fake.click_calls) == 1,
            f"\u70b9\u51fb\u6070\u597d\u53d1\u751f 1 \u6b21\uff08\u5b9e\u6d4b {len(fake.click_calls)}\uff09")
+        ck(fake.lifted == [1234],
+           "\u70b9\u51fb\u524d\u5148\u62ac Z \u5e8f\uff08raise_window \u88ab\u8c03\u4e00\u6b21\uff09",
+           str(fake.lifted))
+        ck(fake.toplit >= 1,
+           f"\u5019\u9009\u70b9\u9010\u4e2a\u7528 top_window_at \u9a8c\u8bc1\uff08\u5b9e\u6d4b {fake.toplit} \u6b21\uff09")
         if fake.click_calls:
             x, y = fake.click_calls[0]
             ck(100 <= x <= 1600 and 100 <= y <= 1100,

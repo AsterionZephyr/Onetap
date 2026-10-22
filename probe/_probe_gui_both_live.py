@@ -1,6 +1,6 @@
 """probe/_probe_gui_both_live.py — 用**真实 App** 驱动 GUI 跑一次 --target both
 
-为什么不用点击：HANDOFF.md §10 第 7 条 —— 远程会话（GameViewer）下 Tk 窗口
+为什么不用点击：HANDOFF.md §6 第 7 条 —— 远程会话（GameViewer）下 Tk 窗口
 收不到合成点击。`desktop_click` 会报告落点与目标一致，但 `ttk.Button` /
 `ttk.Combobox` 毫无反应。所以这个探针走**程序化路径**：
 

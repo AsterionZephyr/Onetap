@@ -1,10 +1,10 @@
-"""docs/_probe_gui2_runner.py — 验证 gui.runner 真能驱动 steps/main.py
+"""probe/_probe_gui2_runner.py — 验证 gui.runner 真能驱动 steps/main.py
 
 不弹窗、不启动 ok-ww。用 `--list`（只打印链条，不执行）验证：
   子进程起得来、stdout 收得到、退出码读得到、整树终止可用。
 
 跑法：
-    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 docs\\_probe_gui2_runner.py
+    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 probe\\_probe_gui2_runner.py
 """
 
 import json
@@ -159,7 +159,7 @@ check("stop() 报告了结果", bool(note), note)
 
 # ⚠️ 判据用 Popen.poll()，**不要**用 os.kill(pid, 0)。
 #    Windows 上 pid 在 Popen 回收前仍可能命中，那是测试写法的问题，
-#    不是"没杀掉"（见 docs/_probe_gui2_stop.py 的对照）。
+#    不是"没杀掉"（见 probe/_probe_gui2_stop.py 的对照）。
 deadline = time.time() + 5
 while time.time() < deadline and r3.proc.poll() is None:
     time.sleep(0.1)

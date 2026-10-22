@@ -1,11 +1,11 @@
-"""docs/_probe_gui2_visual.py — 打开真窗口，停在一个可截屏的状态
+"""probe/_probe_gui2_visual.py — 打开真窗口，停在一个可截屏的状态
 
-依项目自身原则「抓图必须落盘供肉眼复核」（HANDOFF §10.5），GUI 也必须**看图**
+依项目自身原则「抓图必须落盘供肉眼复核」（HANDOFF.md §6 第 5 条），GUI 也必须**看图**
 判断。本脚本开窗、填一些假日志与节点状态、切到第 2 页载入一个节点，
 然后**保持窗口存活 N 秒**供外部截屏。
 
 跑法：
-    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 docs\\_probe_gui2_visual.py [秒数]
+    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 probe\\_probe_gui2_visual.py [秒数]
 """
 
 import os

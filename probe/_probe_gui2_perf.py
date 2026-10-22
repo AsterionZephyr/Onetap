@@ -1,9 +1,9 @@
-"""docs/_probe_gui2_perf.py — 高亮性能：全量 vs 增量
+"""probe/_probe_gui2_perf.py — 高亮性能：全量 vs 增量
 
 单独成文件（而不是塞进 -c），因为 PowerShell 会把多行 -c 参数弄坏。
 
 跑法：
-    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 docs\\_probe_gui2_perf.py
+    & "D:\\WORKs\\Anaconda\\python.exe" -X utf8 probe\\_probe_gui2_perf.py
 """
 
 import os

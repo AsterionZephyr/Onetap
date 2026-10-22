@@ -1,7 +1,7 @@
 """ww_action.py — ok-ww 的动作元素定位（行结构扫描）
 
 ok-ww 的「开始」按钮不是固定模板，而是「每日任务」行末端的元素，
-由行结构扫描得出（见 run_daily2.py 与 FRAMEWORK §5.5 实测三）。
+由行结构扫描得出（见 run_daily2.py 与 HISTORY A.5 实测三）。
 
 把它抽成函数，供编排层调用。
 """

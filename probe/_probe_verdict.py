@@ -12,7 +12,7 @@
   - **FAULT #18**：程序升级把汇总行正则打死，`success`/`skipped` 静默变 None。
     ⇒ 验证两种格式都认，且失配时显式警示。
 
-    python -X utf8 docs/_probe_verdict.py
+    python -X utf8 probe/_probe_verdict.py
 """
 
 import sys

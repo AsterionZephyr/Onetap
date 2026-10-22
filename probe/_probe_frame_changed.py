@@ -27,7 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from orchestrator import window                      # noqa: E402
-from orchestrator.steps import step8_run_task as s8  # noqa: E402
+# 原 steps/step8_run_task.py 的骨架现在是 steps/common/push.py；
+# frame_changed 本体在 frameops.py，push 只是从那里取（re-export）
+from orchestrator.steps.common import push            # noqa: E402
 
 RESULTS = []
 
@@ -66,7 +68,7 @@ def main():
     else:
         for a, b, desc in pairs:
             fa, fb = load(RUN / a), load(RUN / b)
-            ch, why = s8.frame_changed(fa, fb)
+            ch, why = push.frame_changed(fa, fb)
             print(f"\n  {desc}")
             print(f"        {why}")
             check(f"{a} vs {b} 应判「有变化」", ch, True,
@@ -74,8 +76,8 @@ def main():
 
         # 负向：同一帧必须判「无变化」，否则就是无脑放行
         same = load(RUN / "006-no-change-try2.png")
-        ch, why = s8.frame_changed(same, same)
-        print(f"\n  负向：同一帧")
+        ch, why = push.frame_changed(same, same)
+        print("\n  负向：同一帧")
         print(f"        {why}")
         check("同一帧应判「无变化」", ch, False, "（防无脑放行）")
 
@@ -84,7 +86,7 @@ def main():
     base = np.full((200, 300, 3), 60, dtype=np.uint8)
     tiny = base.copy()
     tiny[10, 10] = [255, 255, 255]
-    ch, why = s8.frame_changed(base, tiny)
+    ch, why = push.frame_changed(base, tiny)
     print(f"        {why}")
     check("单像素扰动应判「无变化」", ch, False)
 
@@ -92,7 +94,7 @@ def main():
     print("\n  正向：插入 20x20 白块（模拟 toast，整帧占比 0.67%）")
     toast = base.copy()
     toast[5:25, 100:120] = [255, 255, 255]
-    ch, why = s8.frame_changed(base, toast)
+    ch, why = push.frame_changed(base, toast)
     print(f"        {why}")
     check("局部白块应判「有变化」", ch, True,
           "（整帧均值只有 ~0.67，旧判据必然漏）")
@@ -100,13 +102,13 @@ def main():
     # 正向：整页切换（ok-ww 导航那种）也必须继续被原判据抓到
     print("\n  正向：整页由暗变亮（模拟 ok-ww 页面切换）")
     page = np.full((200, 300, 3), 200, dtype=np.uint8)
-    ch, why = s8.frame_changed(base, page)
+    ch, why = push.frame_changed(base, page)
     print(f"        {why}")
     check("整页切换应判「有变化」", ch, True, "（第一判据覆盖）")
 
     # 正向：帧尺寸改变
     print("\n  正向：帧尺寸改变（窗口重建）")
-    ch, why = s8.frame_changed(base, np.full((400, 600, 3), 60, dtype=np.uint8))
+    ch, why = push.frame_changed(base, np.full((400, 600, 3), 60, dtype=np.uint8))
     print(f"        {why}")
     check("尺寸改变应判「有变化」", ch, True)
 

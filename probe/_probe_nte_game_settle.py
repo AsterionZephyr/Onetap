@@ -141,28 +141,37 @@ check("5: 稳定时刻晚于画面变亮", info5["waited"] >= 0.2, f"{info5['wai
 
 # 场景 6：产品代码真的存在且可调用（防止探针与产品脱节）
 import inspect  # noqa: E402
-from orchestrator.steps import step8_run_task as s8  # noqa: E402
+
+# 节点 8 拆开后的真实位置：骨架在 steps/common/push.py；ok-nte 的「点前等游戏」
+# 钩子在 apps/nte/nodes/step8_run_task.py；nte_* 本体与 NTE_* 常量在 apps/nte/。
+from orchestrator.apps.nte import (  # noqa: E402
+    NTE_GAME_WAIT_SECONDS,
+    NTE_READABLE_SAMPLES,
+    nte_wait_game_settled,
+)
+from orchestrator.apps.nte.nodes import step8_run_task as nte8  # noqa: E402
+from orchestrator.steps.common import push  # noqa: E402
 
 print("\n--- 6 产品代码接口 ---")
-check("6: nte_wait_game_settled 存在", hasattr(s8, "nte_wait_game_settled"))
-check("6: 常量为正数",
-      s8.NTE_GAME_WAIT_SECONDS > 0 and s8.NTE_READABLE_SAMPLES >= 1)
-sig = inspect.signature(s8.nte_wait_game_settled)
+check("6: nte_wait_game_settled 存在", callable(nte_wait_game_settled))
+check("6: 常量为正数", NTE_GAME_WAIT_SECONDS > 0 and NTE_READABLE_SAMPLES >= 1)
+sig = inspect.signature(nte_wait_game_settled)
 check("6: 签名是 (state, log)", list(sig.parameters) == ["state", "log"],
       str(sig))
-src = inspect.getsource(s8.nte_wait_game_settled)
+src = inspect.getsource(nte_wait_game_settled)
 check("6: 用 game_processes 判游戏出现", "game_processes" in src)
 check("6: 用 grab_frame 判画面可读", "grab_frame" in src)
 check("6: 超时不抛异常（返回 False）", "return False" in src)
 
 # 场景 7：调用点确实接上了（否则一切白搭）
-src_body = inspect.getsource(s8.click_and_confirm)
-check("7: click_and_confirm 里调用了它",
-      "nte_wait_game_settled" in src_body)
-check("7: 只在第 1 轮等（避免重复等待）",
-      "attempt == 1" in src_body)
-check("7: 离线/dry-run 不等待",
-      "args.offline or args.dry_run" in src_body)
+# 骨架 push.click_and_confirm 每轮点击前调 before_click；ok-nte 把等待挂在
+# 自己的 before_click 上（第 1 轮 + 非离线/dry-run）。
+check("7: 骨架在点击前调用 before_click",
+      "before_click(" in inspect.getsource(push.click_and_confirm))
+src_body = inspect.getsource(nte8.before_click)
+check("7: before_click 里调用了它", "nte_wait_game_settled" in src_body)
+check("7: 只在第 1 轮等（避免重复等待）", "attempt == 1" in src_body)
+check("7: 离线/dry-run 不等待", "args.offline or args.dry_run" in src_body)
 
 print("\n" + "=" * 68)
 if FAILS:
