@@ -39,7 +39,7 @@ python -X utf8 probe/zmd_wait_selfcheck.py        # 离线自检，不碰目标�
 
 | 脚本 | 它证明什么 / 干什么 | 行数 | 引用数 |
 | --- | --- | --- | --- |
-| `_check_workspace.py` | 工作区目录契约的只读门禁：根目录文件、docs/ 只放文档、README 目录表对得上、无垃圾残留；exit≠0 即违约 | 156 | 0 |
+| `_check_workspace.py` | **工作区门禁**（7 条，exit≠0 即违约）：C1~C4 目录契约（根目录文件、docs/ 只放文档、README 目录表、无残留）+ C5~C7 文档一致性（相对链接、「共 N 条」声明、INV/FAULT/规则编号引用） | 313 | 0 |
 
 ### 回归自检（守已修故障：FAULT #n / INV-n）
 
@@ -161,3 +161,4 @@ python -X utf8 probe/zmd_wait_selfcheck.py        # 离线自检，不碰目标�
 - 22 个原本住在 `docs/` 的探针搬到这里：与 `docs/` **同深度**，所以脚本里 `parent.parent` 推仓库根的写法一个都不用改。
 - 删掉 19 个零引用、无说明的一次性脚本（其中 `_probe_gui2_stepnote.py` 连语法都不通过）；需要时从 git 历史取回。
 - 新增 `_check_workspace.py`：把「根目录只放三份文件 / `docs/` 只放文档 / README 目录表对得上 / 无垃圾残留」变成 exit≠0 的门禁；回归清单里也加了一条。
+- 之后（ADR 0007）又给同一个脚本补了 C5~C7：文档相对链接、「共 N 条」声明与现实条目数、`INV-nn` / `FAULT #nn` / `硬性规则 n` 的引用可解析。反例验证过：故意写坏链接 / 写错条数 / 引用不存在的 INV 都会 FAIL。

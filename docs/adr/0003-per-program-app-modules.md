@@ -153,7 +153,7 @@
 5. `step8 --target zmd --offline --adopt-frame logs/probe/zmd_full.png --only-locate`
 6. `probe/activate_selfcheck.py`（改 `input`/`win32` 时必跑：置前台兜底点击的落点验证，FAULT #36）
 7. 有程序的机器上：`--target <key> --dry-run`（ww/nte/zmd 各自一次）
-8. `probe/_check_workspace.py`（**目录契约门禁**：根目录只放三份文件、`docs/` 只放文档、README 目录表对得上、无垃圾残留；exit≠0 即违约）
+8. `probe/_check_workspace.py`（**工作区门禁**，7 条：目录契约 C1~C4 —— 根目录只放三份文件、`docs/` 只放文档、README 目录表对得上、无垃圾残留；文档一致性 C5~C7 —— 相对链接有效、「共 N 条」声明与现实一致、`INV-nn` / `FAULT #nn` / `硬性规则 n` 引用可解析。exit≠0 即违约）
 
 > **后续（2026-10-22）**：[ADR 0005](./0005-per-program-node-chain.md) 已把**节点链清单**拆到每个程序
 > （`apps/<key>/nodes/__init__.py` 的 `NODES`）；本 ADR 的「按程序切模块」**仍然有效**，只是

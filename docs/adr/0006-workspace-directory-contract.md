@@ -4,7 +4,7 @@
 
 ## 状态
 
-已接受。已按本决策完成一轮整理，契约由 [`probe/_check_workspace.py`](../../probe/_check_workspace.py) 逐条校验（4 条判据，exit≠0 即违约），并列入 [ADR 0003](0003-per-program-app-modules.md) 的共用层回归清单第 8 条。
+已接受。已按本决策完成一轮整理，契约由 [`probe/_check_workspace.py`](../../probe/_check_workspace.py) 逐条校验（本决策对应 C1~C4；同一脚本另有 C5~C7 文档一致性判据，见 [ADR 0007](0007-doc-layering-single-source.md)。exit≠0 即违约），并列入 [ADR 0003](0003-per-program-app-modules.md) 的共用层回归清单第 8 条。
 
 ## 背景
 
