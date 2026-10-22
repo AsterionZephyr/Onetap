@@ -198,6 +198,23 @@ orchestrator/
 | **通用唯一性 API** | 把「全帧所有 >=0.85 位置」做成标准接口，任何定位都必须过这一关 |
 | **性能** | 当前 `all_hits` 是 Python 逐点循环，1520×1020 全帧扫描很慢。正式实现应用 numpy 向量化（`stride_tricks` + 矩阵相关） |
 
+### 5.3 节点清单与钩子参数
+
+原先这部分写在 [CONTEXT.md](./CONTEXT.md) 的术语条目里（术语表不该做实现索引，见 [ADR 0007](./adr/0007-doc-layering-single-source.md)），搬到这里：
+
+- **清单元素**：`Node(sid, name, label, why, has_args, shared)`。`sid` 是**该程序清单内**的编号（不连续是刻意的——没有节点 3）；`has_args=True` 表示该节点有程序专属参数（GUI 行尾标 ★）；`shared` 区分共用节点与专属节点。
+- **清单位置**：`orchestrator/apps/<key>/nodes/__init__.py` 的 `NODES` 字面量。它是「这个程序跑哪几节」的**唯一出处**：`--list`、主控（`steps/main.py`）与 GUI 都只读它。
+- **共用节点**（`shared=True`）：实现固定在 `orchestrator/steps/common/<name>.py`，**不认识任何具体程序**；程序差异只能经下列钩子参数传入。
+
+  | 节点 | 钩子参数 |
+  | --- | --- |
+  | 5 | `pre_ready` |
+  | 6 | `pre_frame` / `identity` / `identity_hint` |
+  | 8 | `push.run` 的 `navigate` / `locate` / `wait` / `before_click` / `locate_note` |
+
+- **专属节点**（`shared=False`）：实现固定在 `orchestrator/apps/<key>/nodes/<name>.py`，只服务该程序，不得被别的程序的节点 import。
+- **清单漂移的检测点**：`orchestrator/steps/chain.py` 的 `check_all()` 是引擎侧检查（清单缺失/为空、编号重复、节点文件不在、目录里有清单未登记的 `step*.py`）；GUI 启动时逐程序比对并告警。二者是同一项检查的两处实现。
+
 ---
 
 ## 6. 工作方式建议（血泪教训）
