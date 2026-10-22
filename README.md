@@ -59,7 +59,7 @@ ok-ww / ok-nte 的节点 5/6 用共用节点，只有节点 8 专属。为什么
 | `probe/` | 一次性探测脚本（**证据来源，不是产品代码**）—— 索引见 [`probe/README.md`](./probe/README.md) |
 | `docs/` | **全部文档**：规范 / 手册 / 判定 / GUI / 历史 / 故障流水 / ADR |
 | `legacy/` | 旧版编排器与历史探测记录（保留作证据） |
-| `logs/` | 运行日志与抓帧落盘（**不入库**，见 [`docs/VERDICT.md`](./docs/VERDICT.md) 的清理策略） |
+| `logs/` | 运行日志与抓帧落盘（**不入库**）；`logs/runs/` **只保留最近十轮**，策略见 [`docs/RUNBOOK.md`](./docs/RUNBOOK.md) §11，历次运行索引见 [`docs/RUN-INDEX.md`](./docs/RUN-INDEX.md) |
 
 ---
 

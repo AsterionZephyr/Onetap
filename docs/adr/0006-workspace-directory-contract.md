@@ -4,7 +4,7 @@
 
 ## 状态
 
-已接受。已按本决策完成一轮整理，契约由 [`probe/_check_workspace.py`](../../probe/_check_workspace.py) 逐条校验（本决策对应 C1~C4；同一脚本另有 C5~C7 文档一致性判据，见 [ADR 0007](0007-doc-layering-single-source.md)。exit≠0 即违约），并列入 [ADR 0003](0003-per-program-app-modules.md) 的共用层回归清单第 8 条。
+已接受。已按本决策完成一轮整理，契约由 [`probe/_check_workspace.py`](../../probe/_check_workspace.py) 逐条校验（本决策对应 C1~C4；同一脚本另有 C5~C7 文档一致性判据，见 [ADR 0007](0007-doc-layering-single-source.md)，以及只提示不拦的 C8 日志保留检查。exit≠0 即违约），并列入 [ADR 0003](0003-per-program-app-modules.md) 的共用层回归清单第 8 条。
 
 ## 背景
 
@@ -20,9 +20,9 @@
 ## 决策
 
 1. **根目录只放三份文件**：`README.md`（项目门面）、`AGENTS.md`（新会话必读）、`.gitignore`。任何新增的顶层目录必须在 `README.md` 的「## 目录」表里有行。
-2. **`docs/` 只放文档**：`.md` 文件 + `adr/`（决策记录）+ `img/`（文档引用的配图，目前只有 `gui2-p1.png`）。**探针不进 `docs/`，配图不进 `docs/` 根**。
+2. **`docs/` 只放文档**：`.md` 文件 + `adr/`（决策记录）+ `img/`（文档引用的配图；目前为空 —— 原 `gui2-p1.png` 已作为过期资产删除）。**探针不进 `docs/`，配图不进 `docs/` 根**。
 3. **一次性证据脚本全部单层放在 `probe/`**，并在 `probe/README.md` 里维护**一行一条的索引**（79 条，分「门禁 / 回归自检 / MaaEnd / ok-nte / ok-ww / GUI / 通用」七组，每行写清它证明什么）。不按程序或用途再分子目录。
-4. **运行产物只在 `logs/`**（已 gitignore，保留/清理策略归 [`docs/VERDICT.md`](../VERDICT.md)）。任何脚本都不得把中间产物写到仓库根或 `docs/`。
+4. **运行产物只在 `logs/`**（已 gitignore；保留策略是**只留最近十轮**，见 [`docs/RUNBOOK.md`](../RUNBOOK.md) §11，长期索引在 [`docs/RUN-INDEX.md`](../RUN-INDEX.md)）。任何脚本都不得把中间产物写到仓库根或 `docs/`。
 5. 上述四条写进 `probe/_check_workspace.py`，**exit 0 才算合格**；改共用层时与自检一起跑。
 
 ## 理由

@@ -337,4 +337,48 @@ GUI 代码），只做这三步：
 | 串联时的前台锁 | **已证实**：紧接上一程序退出后置前台可能失败，编排目前没有显式目标间等待；节点 7 失败先等 10 秒再重跑 | INV-42 |
 | 跨程序残留 | ok-nte 正常完成会把 launcher `NTEGame.exe` 留在后台，靠收尾的跨程序复检报告出来，不自动杀 | FAULT #31 |
 
+## 11. 日志保留（只留最近十轮）
+
+`logs/runs/` 下每次运行一个目录：`run-<YYYYMMDD-HHMMSS>`（链式运行时里面再按程序分子目录）。
+**规则：只保留最近十轮，更早的整目录删除。** 长期记录不靠目录，靠 [`docs/RUN-INDEX.md`](./RUN-INDEX.md)
+的索引（每个运行一行：开始时间 / 文件数 / 大小 / 程序 / 结果 / 被哪份文档引用）。
+
+### 11.1 谁在清
+
+| 触发 | 行为 |
+| --- | --- |
+| **GUI 每跑完一轮** | `gui/app.py` 的 `on_finished` 起一个**后台线程**调 `orchestrator.logretention.sweep_silently()`。**静默**：不弹窗、异常不冒泡、不改变这一轮的结果，只往日志加一行「清理 N 个旧运行目录」 |
+| **手工命令行** | `python -X utf8 -m orchestrator.logretention` 默认 **dry-run**，只打印「会留哪些、会删哪些」，不动盘 |
+
+### 11.2 怎么手工跑
+
+```powershell
+python -X utf8 -m orchestrator.logretention                     # dry-run：看计划
+python -X utf8 -m orchestrator.logretention --apply              # 真删，保留最近 10 轮
+python -X utf8 -m orchestrator.logretention --keep 3 --apply     # 只留 3 轮
+python -X utf8 -m orchestrator.logretention --all --apply        # 连手工命名的实验目录一起淘汰
+python -X utf8 -m orchestrator.logretention --index              # 按当前 logs/runs 打印索引表（stdout）
+```
+
+⚠️ `--index` **只打印到 stdout、不写文件**：`docs/RUN-INDEX.md` 是**含已删目录的历史快照**，
+直接覆盖就丢掉了被清理那些轮次的记录（它们正是文档里运行号引用的对象）。要长期留档先转存再决定。
+
+判据是**目录名里的时间戳**，不是 mtime —— 实测 mtime 会倒挂（`run-20261019-055729` 里的文件写到
+2026-10-20 本地，按 mtime 会排到更新的 run 前面）。没有时间戳的手工目录（`fault34-e2e` 这类）
+**默认不碰**，加 `--all` 才淘汰。`--keep 0` 直接拒绝（等于删光）。
+
+### 11.3 不自动删的东西
+
+- `logs/shots/` 里的 `nte-page-00.png` / `nte-clean.png` / `bg-verify-002.png`：被 `probe/` 与
+  FAULT-LOG 当**源帧**引用，删了这些探针就没有输入。
+- `logs/iconcheck/`：图标制作产物（`final.ico` 等），是**资产**不是日志。
+- `logs/probe/zmd_full.png`：`probe/zmd_*_selfcheck.py` 的固定输入。
+- **文档里的运行号**：`docs/HISTORY.md` / `docs/FAULT-LOG.md` 里几十处 `run-20261016-011008` 之类的引用
+  **删目录也不改写** —— 那是历史叙事，改成「已清理」等于改写历史。要找回证据看 RUN-INDEX 里同一轮的位置。
+
+### 11.4 门禁只提示不拦
+
+`probe/_check_workspace.py` 的 **C8** 发现 `logs/runs/` 里时间戳目录超过十轮时只打印提示，
+**不返回违约**：日志删不掉（文件被占用、权限不足）不该让工作区门禁变红。
+
 旧版编排器（`--only ok-ww`、`--pre-clean` 写 `orch-runs/` 那套）在 [legacy/code-old-orchestrator/](../legacy/code-old-orchestrator/)，已不在 import 路径上，不要按旧文档的命令跑。

@@ -39,7 +39,7 @@ python -X utf8 probe/zmd_wait_selfcheck.py        # 离线自检，不碰目标�
 
 | 脚本 | 它证明什么 / 干什么 | 行数 | 引用数 |
 | --- | --- | --- | --- |
-| `_check_workspace.py` | **工作区门禁**（7 条，exit≠0 即违约）：C1~C4 目录契约（根目录文件、docs/ 只放文档、README 目录表、无残留）+ C5~C7 文档一致性（相对链接、「共 N 条」声明、INV/FAULT/规则编号引用） | 313 | 0 |
+| `_check_workspace.py` | **工作区门禁**（8 条，exit≠0 即违约）：C1~C4 目录契约（根目录文件、docs/ 只放文档、README 目录表、无残留）+ C5~C7 文档一致性（相对链接、「共 N 条」声明、INV/FAULT/规则编号引用）+ C8 日志保留（`logs/runs/` 超十轮只提示，见 RUNBOOK §11） | 339 | 0 |
 
 ### 回归自检（守已修故障：FAULT #n / INV-n）
 

@@ -164,6 +164,7 @@ orchestrator/
 ├── programs.py    目标程序清单（`Program` 数据类；`ALL` 是**唯一来源**）
 ├── targets.py     `--target` 表达式的解析与顺序（加程序不用改这里）
 ├── cleanup.py     按血缘清理（见 VERDICT.md §8）
+├── logretention.py 日志保留：`logs/runs/` 只留最近十轮（按**目录名时戳**排序，不看 mtime；GUI 跑完静默清理，见 RUNBOOK.md §11）
 ├── steps/         引擎（`main`/`context`/`chain`）+ 共用节点 `common/`（1/2/4/5/6/7/9 与节点 8 骨架 `push.py`），见 RUNBOOK.md
 └── assets.json    当前加载的资产清单
 ```
@@ -277,7 +278,7 @@ orchestrator/
 | **`probe/_probe_stalled_live.py`** | **FAULT #30 的 STALLED 分支——真实卡死驱动**。**2026-10-18 已跑通（闭环）**：等业务行 → `ShowWindow(SW_MINIMIZE)` 返回 True → 哨兵 `og.executor.pause pos_invalid:(-32000,-32000)` → 节点 8 用时 135.8s 判 `failed` / `data.result='stalled'` → `state.result='stalled'`、主控退出码 3，即「STALLED 映射 failed 而非 timeout」成立。证据 `logs/runs/stalled-live-20261018-061325`。⚠️ 用法上踩过 FAULT #36（见 §10 第 8 条）：主控 stdout 必须落**文件**，不能挂**不读的 PIPE** |
 | **`probe/_probe_state_race.py`** | **`state.json` 原子替换 vs 读轮询的撞车率**（FAULT #37：Windows 下目标文件被读打开时 `os.replace` 报 WinError 5）。两种跑法：裸 `os.replace` 测率（实测 **7.8%**）、`--verify-fix` 走**真实 `RunState.save()`**（带 `--raw` 作负向对照，应如实复现；不带则必须 0 失败） |
 | **`probe/README.md`** | **`probe/` 下全部脚本的一行索引**（79 个，按门禁 / 回归自检 / 每程序 / GUI / 通用分组，含跑法与命名约定）。新增探针先看它的「新增探针的规矩」 |
-| **`probe/_check_workspace.py`** | **工作区门禁**（exit≠0 = 违约），7 条判据：C1~C4 目录契约（根目录只放三份文件、`docs/` 只放文档、README 目录表对得上、无残留产物，见 ADR 0006）+ C5~C7 文档一致性（相对链接有效、「共 N 条」声明与现实一致、`INV-nn` / `FAULT #nn` / `硬性规则 n` 引用可解析，见 ADR 0007）。已列入 `docs/adr/0003` 共用层回归清单第 8 条 |
+| **`probe/_check_workspace.py`** | **工作区门禁**（exit≠0 = 违约），8 条判据：C1~C4 目录契约（根目录只放三份文件、`docs/` 只放文档、README 目录表对得上、无残留产物，见 ADR 0006）+ C5~C7 文档一致性（相对链接有效、「共 N 条」声明与现实一致、`INV-nn` / `FAULT #nn` / `硬性规则 n` 引用可解析，见 ADR 0007）+ C8 日志保留（`logs/runs/` 超过十轮只**提示**不拦，见 RUNBOOK §11）。已列入 `docs/adr/0003` 共用层回归清单第 8 条 |
 | **`legacy/probe-investigation/run_daily2.py`** | **ok-ww 端到端参考实现**（九道校验） |
 | **`legacy/probe-investigation/nte_run.py`** | **ok-nte 端到端参考实现**（两级锚点，八道校验） |
 | **`probe/nte_main.py`** | `all_hits` **唯一性检查工具**（被多个脚本复用） |

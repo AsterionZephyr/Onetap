@@ -23,6 +23,7 @@
 | `docs/GUI.md`              | GUI 手册与自检记录                                                                                                                                                                       |
 | `docs/CONTEXT.md`          | **领域术语表**（说话和写文档用它的词，不要另造同义词）                                                                                                                                                     |
 | `docs/HISTORY.md`          | 实测记录与历史（含 ok-ww 窗口事实记录附录）                                                                                                                                                         |
+| `docs/RUN-INDEX.md`        | **运行目录索引**：`logs/runs/` 历次运行的开始/程序/结果/被文档引用情况（由 `python -X utf8 -m orchestrator.logretention --index` 生成）
 | `docs/FAULT-LOG.md`        | 故障流水账                                                                                                                                                                             |
 | `docs/adr/`                | 决策记录（0001 黑盒真实光标、0002 锚点组合与联合唯一性、0003 每程序专项模块、0004 Tkinter 而非 Web、0005 节点链属于每个程序、0006 工作区目录契约、0007 文档分层与单一事实源）                                                                                    |
 | `orchestrator/`            | **正式实现**：引擎（`steps/main.py` + `context.py` + `chain.py`）、共用节点（`steps/common/`）、每程序清单与专属节点（`apps/<key>/nodes/`）。**每个程序跑哪几节由它自己的 `NODES` 清单决定**，见 `docs/adr/0005`                   |
@@ -31,7 +32,7 @@
 | `orchestrator/frameops.py` | 节点 8 的**程序无关**助手：`shot` / `frame_changed` / `finish` / `CLICK_*` 阈值（`apps/` 与 `steps/common/push.py` 都从这里取，谁都不 import 谁）                                                          |
 | `probe/`                   | **一次性探测脚本**，是证据来源，不是产品代码；**79 个脚本的索引在 `probe/README.md`**，工作区契约门禁是同目录的 `probe/_check_workspace.py`                                                                                |
 | `templates/`               | 图像资产 + `assets.json`（图像 + 比例位置 + 出生尺寸 + 用途）                                                                                                                                       |
-| `logs/`                    | 运行日志与抓帧落盘（**入库忽略**；保留/清理策略见 `docs/VERDICT.md`）                                                                                                                                    |
+| `logs/`                    | 运行日志与抓帧落盘（**入库忽略**）；`logs/runs/` 只留最近十轮，见 `docs/RUNBOOK.md` §11                                                                                                                                    |
 | `legacy/`                  | 程序分节点运行前的历史遗物                                                                                                                                                                     |
 
 ## 动手前
