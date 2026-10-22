@@ -1,6 +1,6 @@
 """_check_workspace.py — 工作区目录契约 + 文档一致性的只读门禁（exit≠0 即违约）。
 
-七条判据：
+八条判据：
 
   C1 根目录**文件**只有 README.md / AGENTS.md / .gitignore（目录另由 C3 管）
   C2 docs/ 下只有 .md 文件、adr/、img/ —— 探针与配图不得住在文档目录
@@ -10,9 +10,11 @@
   C6 「共 N 条 / 十二条」类声明与实际条目数一致（HANDOFF §2.1 / §2.2、FRAMEWORK §1）
   C7 引用可解析：INV-nn、FAULT #nn、硬性规则 n 都能找到定义处
      （反向查孤儿不变量：只报不拦）
+  C8 logs/runs/ 的时间戳目录不超过 KEEP_RUNS（10）个（保留策略的运维提示，**只报不拦**）
 
 约定见 docs/adr/0006-workspace-directory-contract.md（C1~C4）与
-docs/adr/0007-doc-layering-single-source.md（C5~C7）。
+docs/adr/0007-doc-layering-single-source.md（C5~C7）；
+C8 对应 docs/RUNBOOK.md §11「日志保留」，它永远不返回违约。
 
 跑法（仓库根，无需管理员，不启动任何目标程序）：
 
@@ -38,6 +40,10 @@ TOP_LEVEL_SKIP = {".git", ".dsh-tmp", "__pycache__"}
 TOC_SKIP = {"README.md", "AGENTS.md"}
 # C5/C7 遍历时跳过的目录：不是本仓库的现行文档/代码
 SCAN_SKIP_DIRS = {".git", ".dsh-tmp", "__pycache__", "node_modules", "logs", "legacy"}
+# C8：logs/runs/ 的保留轮数（与 orchestrator/logretention.py 的 KEEP_DEFAULT 一致）。
+# SCAN_SKIP_DIRS 已经把整个 logs/ 排除在 C5/C7 扫描之外，所以 C8 自己 stat 它。
+KEEP_RUNS = 10
+RUN_DIR_RE = re.compile(r"^run-\d{8}-\d{6}$")
 
 # C4：这些路径出现即违约（全部来自一次性的本机事故或临时输出，不应存在于仓库）
 JUNK = [
@@ -279,6 +285,25 @@ def c7_refs_resolve() -> list[str]:
     return bad
 
 
+def c8_logs_retention() -> list[str]:
+    """C8 —— logs/runs/ 只留最近 KEEP_RUNS 轮：**只提示，永不返回违约**。
+
+    日志没被清理说明「保留策略没人执行」（或 GUI 那次清理失败），不是工作区违约：
+    文件被占用、权限不足都会让删除失败，那不该让门禁变红。所以这里 print 提示后返回 []。
+    """
+    runs = ROOT / "logs" / "runs"
+    if not runs.is_dir():
+        return []                       # 没有 logs/ 的干净检出不报错
+    names = sorted(p.name for p in runs.iterdir()
+                   if p.is_dir() and RUN_DIR_RE.match(p.name))
+    if len(names) > KEEP_RUNS:
+        stale = len(names) - KEEP_RUNS
+        print(f"       [note] logs/runs/ 有 {len(names)} 个运行目录，超过保留的 {KEEP_RUNS} 轮"
+              f"（多 {stale} 个）；清理：python -X utf8 -m orchestrator.logretention --apply"
+              f"（策略见 docs/RUNBOOK.md §11）")
+    return []
+
+
 CHECKS = [
     ("C1 根目录只有 README.md / AGENTS.md / .gitignore", c1_root_files),
     ("C2 docs/ 只放文档（.md + adr/ + img/）", c2_docs_only_docs),
@@ -287,6 +312,7 @@ CHECKS = [
     ("C5 文档内部相对链接全部有效", c5_md_links_resolve),
     ("C6「共 N 条」类声明与实际条目数一致", c6_count_claims),
     ("C7 INV-nn / FAULT #nn / 硬性规则 n 引用可解析", c7_refs_resolve),
+    ("C8 logs/runs/ 只留最近 10 轮（只提示）", c8_logs_retention),
 ]
 
 

@@ -952,6 +952,21 @@ class App(tk.Tk):
         raws = self.watcher.poll() or {}
         for target, raw in raws.items():
             self._apply_final(target, raw)
+        # 日志保留：只留最近十轮（orchestrator/logretention.py）。
+        # 静默 = 后台线程 + 不弹窗 + 失败不冒泡；清理是附带动作，不该影响
+        # "这一轮跑完了没有" 这个结论，也不该让界面卡一下。
+        threading.Thread(target=self._sweep_logs, daemon=True).start()
+
+    def _sweep_logs(self):
+        """编排结束后静默清理旧运行目录（保留策略见 orchestrator/logretention.py）。"""
+        try:
+            from orchestrator import logretention
+            rep = logretention.sweep_silently()
+        except Exception:                   # noqa: BLE001 —— 见上：不该冒泡
+            return
+        if rep and rep.get("deleted"):
+            self.bus.log("[GUI] 日志保留：清理 %d 个旧运行目录（保留最近 %d 轮）"
+                         % (len(rep["deleted"]), rep.get("keep", 0)))
 
     def _apply_final(self, target, raw):
         for sid, rec in (raw.get("steps") or {}).items():
