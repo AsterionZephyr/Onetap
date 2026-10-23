@@ -19,7 +19,7 @@
 | PostMessage | **记录在案的未采用路线，不实现**。理由见 ADR 0001 | HISTORY E.2.1 §2.2 |
 | 图像库的性质 | **资产**。以图像为核心，记录该图像对应区域需要点击的位置 | 用户决策 |
 | 板块数 | **三块**（程序链条 / 识别与操作 / 图像库），不设第四块 | 用户决策 |
-| **目标程序数** | **三个**：MaaEnd（zmd）、ok-ww、ok-nte。ww/nte **结构同构**（INV-28），MaaEnd 单层；共用内核，节点链各程序各一份 | §0.1 |
+| **目标程序数** | **四个**：三个**操作型**（MaaEnd（zmd）、ok-ww、ok-nte；ww/nte **结构同构**（INV-28），MaaEnd 单层）+ **FOS（fos）**，后者**没有可编排的界面**：只启动 + 等它自己退出，全程不识别、不操作 | §0.1、§0.1.3 |
 | 最终目标 | **按顺序启动这些程序完成任务** | 用户决策 |
 
 **为什么不用 PostMessage**：它虽然能免掉前台约束（§2.3），但在 UIPI 下非提权进程投递被拒（§2.1 `(5, 'PostMessage', '拒绝访问。')`），而 ok-ww 是 `requireAdministrator`（§2.2）。真实光标走输入队列不受 UIPI 限制。此取舍见 `docs/adr/0001`。
@@ -30,7 +30,8 @@
 
 ## 0.1 目标程序一览
 
-> 本节是**全框架唯一的「因程序而异」清单**。此表之外的一切机制，三程序共用。
+> 本节是**全框架唯一的「因程序而异」清单**。此表之外的一切机制，三个操作型程序共用；
+> FOS 是第 4 个程序，但它**不是操作型**（没有界面要操作），只占 §0.1.3 那一小节。
 
 ### 0.1.1 实现状态（**先读这一条**）
 
@@ -39,6 +40,7 @@
 | **ok-ww** | ✅ 完整覆盖 | ✅ 自己的节点清单 [`apps/ww/nodes/__init__.py`](../orchestrator/apps/ww/nodes/__init__.py)（1,2,4,5,6,7,8,9；仅节点 8 专属）+ [`orchestrator/assets.json`](../orchestrator/assets.json) | ✅ 多次 |
 | **ok-nte** | ✅ 完整覆盖 | ✅ 自己的节点清单 [`apps/nte/nodes/__init__.py`](../orchestrator/apps/nte/nodes/__init__.py)（同上；仅节点 8 专属） | ✅ 多次 |
 | **MaaEnd（zmd）** | ✅ 完整覆盖 | ✅ 自己的节点清单 [`apps/zmd/nodes/__init__.py`](../orchestrator/apps/zmd/nodes/__init__.py)（5/6/8 专属） | ✅ 2026-10-18 一次（HISTORY A.9） |
+| **FOS（fos）** | ✅ 「只启动 + 等它自己退出」 | ✅ 自己的节点清单 [`apps/fos/nodes/__init__.py`](../orchestrator/apps/fos/nodes/__init__.py)（4 节：1,2,3,9；仅节点 3 专属） | ⏳ 待实测（2026-10-23 05:00 首轮） |
 
 **链条属于每个程序**：清单写在 `orchestrator/apps/<key>/nodes/__init__.py`，声明节点**数量、编号、顺序**
 与每节的实现归属（`shared`）；主控（`steps/main.py` / `context.py`，经 `steps/chain.py`）与 GUI 都只按清单执行。
@@ -47,7 +49,14 @@
 
 ⇒ 加第 N 个程序：在 `programs.py` 加一条 `Program` + `orchestrator/apps/<key>/__init__.py`
 + `orchestrator/apps/<key>/nodes/__init__.py`（+ 需要的专属节点文件），**不改 `main.py` / `context.py` / GUI 代码**。
-节点数、编号、顺序随程序（当前三份恰好都是八节）。见 [ADR 0005](./adr/0005-per-program-node-chain.md)。
+节点数、编号、顺序随程序：ww/nte/zmd **三份恰好都是八节**，FOS 是**四节**（1,2,3,9）。
+见 [ADR 0005](./adr/0005-per-program-node-chain.md)。
+⚠️ 新增程序还要同步两处**非代码清单**：`gui/targets.py` 的 `FALLBACK`（GUI 兜底）与
+`orchestrator/apps/__init__.py` 的 `ADAPTERS`（懒 import 入口）；漏了前者 GUI 里看不见它，漏了后者
+`apps.get(key)` 抛 `KeyError`。
+
+**执行顺序不是写死的**：`ALL` 只给**默认**顺序（MaaEnd → ok-ww → ok-nte → FOS）。实际顺序由
+`--target` 的**书写顺序**决定，GUI 的 ↑/↓ 改的就是它（见 [GUI.md](./GUI.md) §2.1）。
 本表其余各行是「实测事实」，覆盖范围以「当前实现」列为准。
 
 ### 0.1.2 差异一览（设计口径）
@@ -113,6 +122,23 @@
 > （[`templates/assets.json`](../templates/assets.json) 已标其为「已弃用」，实体已移入 `legacy/assets/`）。
 > 现状与 ok-ww **完全同构**：身份锚点 → 页面锚点（行）→ 行内扫描动作元素。
 > **保留此注记是为了说明「为什么现在不用固定按钮模板」**，不是可选的实现路径。
+
+### 0.1.3 FOS（fos）—— 第 4 个程序：只启动，不操作
+
+> 用户裁定（2026-10-23）：**"该程序只需要启动，之后等待就行，它自己会退出并清理干净，全程不需要
+> 任何识别、操作；所以也不要去深扒它的运行逻辑。"** 本节就是这条裁定的落地形态。
+
+| 项 | 结论 |
+| --- | --- |
+| 可执行文件 | `E:\TOOLS\ScriptsGames\MPA\FOS.exe`（单文件 PyInstaller，**单层**，无 pythonw 第二层） |
+| 我们要做的只有两件 | **启动**（节点 2，共用 `step2_launch`）；**等它自己退出**（节点 3，专属 `apps/fos/nodes/step3_wait_exit.py`）。**不抓帧、不识别、不动鼠标、不置前台** |
+| 节点 3 的判据 | **只读进程表**（`apps/fos/__init__.py::fos_processes`）：连续 3 次采样在 MPA 目录下看不见进程 ⇒ 已退出 ⇒ `result=completed`；启动后**一次都没看到**进程 ⇒ FAILED（多半启动即失败）；超过 `--wait-timeout`（默认 **5400s**）⇒ TIMEOUT（由节点 9 决定怎么收） |
+| 为什么不看窗口 | 它自己会退出并清理干净，界面无需干预；研究它的界面/逻辑属**明确不做**的事 |
+| 归属范围 | `programs.FOS.process_prefix` 取**整个 MPA 目录**（不是 `data/apps/<name>`）：PyInstaller 运行期会把子进程（如 `MFWUpdater.exe`）散在目录各处。MPA 里没有被编排的其它程序，故放宽前缀**不违反 FAULT #32**（`programs.self_check()` 逐对验这条） |
+| 两个「刻意的空字段」 | `loose_title_re` / `ready_title_re` / `min_width` / `min_height` 在 FOS 上**永远不会被用到**（从不 `find_window(fos)`）。看到有人拿它们判身份，那是 bug |
+| 为什么没有 4/5/6/7 | 那四节是「等窗口持有者 / 等就绪 / 抓首帧校验 / 置前台」，都依赖**要操作的窗口**。FOS 没有 ⇒ 这四节在它的链上**根本不存在**（不是暂时禁用） |
+| dry-run | 节点 3 在 `--dry-run` 下**照常等待**：等待不是操作；提前返回会把还在跑的 FOS 带进下一轮 |
+| 上限為何是 5400s | 实测一轮 **4379s（≈73 分钟）** 才自然退出（HISTORY 第 9 轮，`run-20261023-055917`）⇒ 取 90 分钟留 ~23% 余量。`programs.FOS.run_timeout=5400.0` 与 `apps/fos.WAIT_TIMEOUT_SECONDS=5400.0` **必须同值**：前者是主控 per-program 的 `--run-timeout` 默认，后者是节点 3 自己的闸；任一更小都会提前掐掉，而 GUI 不暴露这两个参数 |
 
 ---
 
@@ -259,15 +285,17 @@ failed=['异象界域']  skipped=['异象追猎']
 **链条属于每个程序**：清单写在该程序的 `orchestrator/apps/<key>/nodes/__init__.py` 里，
 元素是 `Node(sid, name, label, why, has_args, shared)`，声明**数量、编号、顺序、每节用哪份实现**。
 主控与 GUI 都只按清单执行：`--only/--from/--to` 的编号是**该程序自己的**节点编号，
-不在该程序清单里的编号直接拒绝。三份当前都是八节（1、2、4、5、6、7、8、9，**没有节点 3**），
-但**节点数不要求相同** —— 新接入的程序可以只有三节，引擎不需要改（[ADR 0005](./adr/0005-per-program-node-chain.md)）。
+不在该程序清单里的编号直接拒绝。ww/nte/zmd 三份都是八节（1、2、4、5、6、7、8、9，**共用编号里没有 3**），
+FOS 那份是四节（1、2、3、9 —— 它的 3 是**自己的**「等它自己退出」，与缺号无关）。
+**节点数不要求相同**：FOS 就是只有四节的现实例证，引擎一行都不用改（[ADR 0005](./adr/0005-per-program-node-chain.md)）。
 
 **共用骨架**在 `orchestrator/steps/common/`，**不认识具体程序**（不出现 `ww`/`nte`/`zmd`）；
 程序差异只经**钩子参数**传入：
 
 | 节点 | 共用骨架 | 程序差异（钩子） |
 | --- | --- | --- |
-| 1 / 2 / 4 / 7 / 9 | `common/stepN_*.py` | ——（三程序无差异） |
+| 1 / 2 / 9 | `common/stepN_*.py` | ——（**所有**程序无差异，FOS 也用这三节） |
+| 4 / 7 | `common/stepN_*.py` | ——（三个操作型程序无差异；FOS 链上没有这两节，因为它没有窗口要等/要置前台） |
 | 5 | `common/step5_wait_ready.py` | `run(..., pre_ready=None)`：返回 `None` 继续，返回 `(status, data, note)` 直接收束。MaaEnd 用它先等自我更新收敛（闸门在 `require_hwnd` 之前） |
 | 6 | `common/step6_first_frame.py` | `run(..., identity, pre_frame=None, identity_hint=None)`：`pre_frame` 在身份校验**之前**跑（点掉压暗身份锚点的弹窗）、`identity` 换成本程序的身份证据、`identity_hint` 只改失败日志措辞 |
 | 8 | `common/push.py` 的 `run`（骨架） | `navigate` / `locate` / `wait` / `before_click` / `locate_note` 五个钩子，由 `apps/<key>/nodes/step8_run_task.py` 传入。MaaEnd 没有任务页与侧栏，整段走 `zmd_run`，只借骨架的 `first_frame` 与参数 |
@@ -490,7 +518,7 @@ pywintypes.error: (5, 'GetCursorPos', '拒绝访问。')
 **状态判定方式因程序而异，编排层不应理解这些细节** —— 各程序的状态读取都在 `orchestrator/apps/<key>.py`，
 由 `orchestrator/verdict.py::verdict_for()` 分派。
 
-**判据只在 [VERDICT.md](./VERDICT.md) 写一份**：三程序判据总表见其 §2，ok-ww 的阶段序列见 §3，
+**判据只在 [VERDICT.md](./VERDICT.md) 写一份**：各程序判据总表见其 §2，ok-ww 的阶段序列见 §3，
 ok-nte 的页标记与 STALLED 见 §4，MaaEnd 的日志窗口见 §5。本文件不再复述。
 「本次运行」的文本窗口（INV-36/37）与超时口径同样只在 VERDICT §6。
 

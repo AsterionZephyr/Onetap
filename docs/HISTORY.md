@@ -1435,3 +1435,99 @@ verdict dispatch / watchdog / foreground / executor pause / **ww verdict**。
 2. `NTEGame.exe`（ok-nte 的 launcher）跑完后残留，节点 9 不处理 —— 待定。
 3. **两程序串联跑一次**（用户的最终要求）尚未做。
 4. GUI 侧尚未验证（本轮全部走命令行）。
+---
+
+**第 9 轮（2026-10-23 05:00 起）—— GUI 任意执行顺序 + FOS 首次纳入编排（四程序串联）**
+
+### 本轮要做的三件事（用户 m00004）
+
+1. GUI 支持**任意调整程序执行顺序**；
+2. 把 `E:\TOOLS\ScriptsGames\MPA\FOS.exe` 纳入编排 —— 只启动，之后等它自己退出并清理，
+   **全程不做任何识别与操作**，也不研究它的内部逻辑；
+3. 05:00 跑一轮完整的四程序串联测试。
+
+### 结果：三个操作型程序全绿，FOS 首跑炸在自己的节点 3（`run-20261023-050007`）
+
+| 程序 | 结果 | 节点 8 耗时 | 关键判据 |
+| --- | --- | --- | --- |
+| zmd（MaaEnd） | ✅ completed | 674.5s | 日志终止信号 `[MXU_KILLPROC] taskkill succeeded ... "Endfield.exe"` |
+| ww（ok-ww） | ✅ completed | 233.8s | 终止标记=True 日常结束=True 杀游戏=False；阶段痕迹 24 条 |
+| nte（ok-nte） | ✅ completed | 578.8s | 汇总 success 7 项 / failed=[] / skipped=['异象界域']；游戏侧残留 1 个 launcher（节点 9 只确认不杀，FAULT #31 既定口径） |
+| fos（FOS） | ❌ 退出码 1 | — | **节点 3 在 import 阶段就死了**（FAULT #38），主控当场报残留 `FOS.exe(32352)` |
+
+三段操作型程序的墙钟：05:00:07 → 约 05:27（约 27 分钟），与历史单程序实测同量级；
+节点 5/6/7 全部按判据通过（`就绪 1201x826` / `1500x1000` / `1458x924`，身份 1.0000）。
+
+### FOS 首跑：只跑完启动
+
+`run-20261023-050007/fos`：节点 1 ok 0.4s、节点 2 ok 1.3s（`已启动 ...\MPA\FOS.exe`），
+节点 3 报 `ImportError: cannot import name 'frameops' from 'orchestrator.steps'` —— 我把
+`orchestrator/frameops.py` 当成了 `steps` 的子模块。**pyflakes / `chain.check_all()` / GUI 三处都没拦住**
+（详见 [FAULT-LOG.md](./FAULT-LOG.md) FAULT #38）。
+
+### 修复与复验（`run-20261023-052839`）
+
+1. `step3_wait_exit.py` 改成 `from .... import frameops`；
+2. `probe/_probe_gui2_selftest.py` 第 1 节加断言「每节模块都能 import」（现 82 条，全绿）；
+3. `--target fos` 单跑：节点 1 ok 0.1s、节点 2 幂等（`已在运行`）、节点 3 **真实等满 1800.6s** 后
+   判 timeout，节点 9 的 watchdog 分支收尾 —— 杀 1 个 `FOS.exe`、8s 内全部退出、游戏侧 0 个。
+
+⇒ 等待、超时、收尸三段都工作正常，**唯一的问题是 30 分钟不够**。
+
+### 关键实测：FOS 31 分钟还没自己退出
+
+`FOS.exe(32352)` 从 05:27:0x 一直活到 05:58:47 被超时收尾杀掉（31.5 分钟）。默认 `--wait-timeout 1800s`
+与主控 `--run-timeout 1800s` 双限，等于**没给它跑完的机会**。这不代表它不会自己退出，只说明
+「30 分钟」这个上限是照主控默认值抄的、没有实测依据。
+
+故另起一轮**纯观测**（`--target fos --run-timeout 7200 --wait-timeout 7200`，`run-20261023-055917`）：
+只启动、只读进程表、不做任何操作，测它自然退出到底要多久。
+
+顺带取了一次进程表以外的黑盒读数（不碰它的日志/界面）：`Get-Process FOS` 的 CPU 时间在 10s 内
+从 700.97s 涨到 709.0s（约 0.8 核满载），工作集 1.1 GB ⇒ **它确实在干活，不是卡死空转**，
+只是这一轮的活比 30 分钟长。同时把 `--wait-timeout` 加进主控的
+透传表（`orchestrator/steps/main.py` 的 `PASSTHROUGH`，只转给节点 3），否则只能靠 `--step-arg`
+硬塞给每一节、被节点 1/2/9 的 `parse_args` 拒绝。
+
+### 本轮创建/修改的文件
+
+- 新建 `orchestrator/apps/fos/`（`__init__.py` + `nodes/__init__.py` + `nodes/step3_wait_exit.py`）
+- 改 `orchestrator/programs.py`（`FOS` 记录、`ALL` 追加）、`orchestrator/apps/__init__.py`（`ADAPTERS`）、
+  `gui/targets.py`（`FALLBACK`）、`orchestrator/steps/main.py`（`--wait-timeout` 透传 + `--target` help）、
+  `orchestrator/targets.py`（docstring 顺序）
+- 改 `gui/app.py`（序号 + ↑/↓ + ↺ 默认序 + `selected_targets()` 按 `_order`）
+- 改 `probe/_probe_gui2_selftest.py`（第 1 节逐程序 EXPECT、第 8 节任意顺序、每节可 import）、
+  `probe/_probe_gui_target_wire.py`（2b 顺序实证）、`probe/README.md`
+- 文档：`AGENTS.md`、`docs/FRAMEWORK.md` §0.1.3、`docs/VERDICT.md` §2.1、`docs/CONTEXT.md`、
+  `docs/HANDOFF.md`、`docs/RUNBOOK.md`、`docs/GUI.md`、`docs/FAULT-LOG.md`（#38）
+
+### 结论：FOS 自然退出要 **73 分钟**，上限改为「按程序声明」
+
+纯观测那轮（`run-20261023-055917`，05:59:17 起，`--run-timeout 7200 --wait-timeout 7200`）：
+
+| 节点 | 结果 | 备注 |
+| --- | --- | --- |
+| 1 check_admin | ok 0.2s | 已提权 |
+| 2 launch | ok 0.3s | 已启动 `...\MPA\FOS.exe` |
+| 3 wait_exit | ok **4379.3s** | `completed：FOS 已于 4379s 自行退出（连续 3 次采样为空）` |
+| 9 cleanup | ok 0.5s | `正常完成，未杀任何进程`（游戏侧 0 个） |
+
+⇒ **4379s ≈ 73 分钟**（05:59:17 → 07:12:1x），全程只说「启动 + 读进程表」，没碰它的窗口/日志。
+照抄主控默认的 30 分钟**没有实测依据**，已按下述方式改掉（三处必须一致）：
+
+- `orchestrator/programs.py`：`Program.__init__` 新增 `run_timeout=None`（存 `self.run_timeout`），
+  FOS 记 `run_timeout=5400.0`（90 分钟，对 73 分钟留 ~23% 余量）。
+- `orchestrator/steps/main.py`：`--run-timeout` 默认改 `None`；`run_one` 里
+  `limit = args.run_timeout if args.run_timeout is not None else (prog.run_timeout or RUN_TIMEOUT)`
+  —— 三个操作型程序仍是 1800s，命令行显式值仍优先。
+- `orchestrator/apps/fos/__init__.py`：`WAIT_TIMEOUT_SECONDS` 1800 → **5400**（节点 3 的闸）。
+  两个闸**必须同值**：任一更小都会提前把它掐掉，而 GUI 不暴露这两个参数。
+
+超时怎么收尾不变：节点 3 到点报 TIMEOUT，主控同时在 `limit` 到点 fire watchdog ⇒ force_close 杀
+`FOS.exe`（`run-20261023-052839` 已验证这条路 8s 内清干净）。
+
+### 待定
+
+1. GUI 上点「四个一起跑」的实跑未做（本轮全部走命令行；GUI 只做了无头自检 + 视觉复核）。
+2. FOS 的 73 分钟是**单次样本**（同一批数据）。任务量变化时可能更久；真超过 5400s 仍会被
+   节点 3 判 TIMEOUT + 主控 force_close 收尸，只是那一轮拿不到 completed。

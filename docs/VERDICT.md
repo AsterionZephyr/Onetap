@@ -12,11 +12,11 @@
 | --- | --- |
 | 判定由框架做 | 程序的界面既不能区分「完成」与「失败回落」，也不能区分「还在跑」与「卡死」 |
 | 证据不足报 UNKNOWN | INV-29/30：宁可报未知，也**绝不默认成功** |
-| 每程序一个判据模块 | `orchestrator/apps/ww.py::ww_verdict`、`apps/nte.py::nte_verdict`、`apps/zmd.py::zmd_verdict`（+ `ZmdLogWindow`） |
+| 每程序一个判据模块 | `orchestrator/apps/ww.py::ww_verdict`、`apps/nte.py::nte_verdict`、`apps/zmd.py::zmd_verdict`（+ `ZmdLogWindow`）；FOS 没有「文本判据」，它的判据是**进程表**（`apps/fos/__init__.py::fos_processes` + `wait_exit`，见 §2.1） |
 | 分派显式 | `orchestrator/verdict.py::verdict_for(program=…)`；未知程序**抛错**，不回落默认（避免「以为在判 A 实际判了 B」） |
 | 判据不同不能复用 | ok-ww 用阶段序列，ok-nte 用终止标记 + 逐项标记，MaaEnd 只用日志信号 —— 三者不可互换 |
 
-## 2. 三程序判据总表
+## 2. 各程序判据总表
 
 | 项 | ok-ww | ok-nte | MaaEnd（zmd） |
 | --- | --- | --- | --- |
@@ -26,6 +26,21 @@
 | 逐任务结果 | **无** | ✅ `DailyRoutineTask:success/failed/skipped: [...]` | **无**（只有每条 task 的 `post_task returned task_id`） |
 | 目标游戏 | `Client-Win64-Shipping.exe` | `HTGame.exe` | `Endfield.exe` |
 | 正常完成后进程 | 自行退出 | 自行退出 | **不退出**（进程消失既非成功也非失败） |
+
+> **FOS（fos）不在上表里**：它没有可判的界面，也没有可读的日志判据 —— 它的完成判定**就是进程表**，
+> 见 §2.1。上表的三列全部是「读界面/读日志」的判据，与它无关。
+
+### 2.1 FOS：进程表就是判据
+
+| 项 | 结论 |
+| --- | --- |
+| 判据 | **只读进程表**，命中条件 = 名字在 `("fos.exe","mfwupdater.exe")` 里 **或** 可执行文件路径以 `E:\TOOLS\ScriptsGames\MPA\` 开头（两条取并集） |
+| 为什么两条并集 | 单文件 PyInstaller 的 bootloader 会从 `%TEMP%\_MEIxxxx` 重新 exec 自己：**路径不在 MPA 下，但名字仍是 `FOS.exe`**。只按路径判会漏，只按名字判会误伤 |
+| 完成 | 连续 **3 次**采样（`CONFIRM_SAMPLES`）都看不见进程 ⇒ `result=completed`，`result_detail` 记「FOS 已于 Ns 自行退出」 |
+| 失败 | 启动后**一次都没看到**过进程就判空 ⇒ `result=failed`（「多半启动即失败」，比报完成安全） |
+| 超时 | 超过 `--wait-timeout`（默认 **5400s**，与 `programs.FOS.run_timeout=5400.0` 对齐 ⇒ 主控 per-program 的 `--run-timeout` 默认值同值；两条闸任一更小都会提前掐）⇒ `result=timeout`，交给节点 9。为什么是 5400：实测自然退出要 4379s（≈73 分钟），见 HISTORY 第 9 轮 |
+| 不做什么 | **不抓帧、不看窗口、不点鼠标、不读它的日志**（用户裁定：不深扒其运行逻辑） |
+| 清理 | 正常完成 ⇒ 节点 9 走「不杀只确认」（同其它程序：`result=completed` 时框架不杀任何进程）；超时/失败 ⇒ 走 `watchdog.force_close` |
 
 ## 3. ok-ww：任务日志的阶段序列
 

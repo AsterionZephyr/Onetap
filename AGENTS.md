@@ -1,7 +1,9 @@
-# Onetap — ok-ww / ok-nte / MaaEnd 黑盒编排
+# Onetap — ok-ww / ok-nte / MaaEnd 黑盒编排（+ FOS 只启动）
 
-在**进程外**、以**真实光标**、**黑盒**地操作自动化程序完成任务，目前包括ok-ww、ok-nte、MaaEnd。
-三个程序均为**他人项目**：本仓库只观察其窗口、只按图像定位、只发真实光标，**不改造其源码**。
+在**进程外**、以**真实光标**、**黑盒**地操作自动化程序完成任务，目前包括ok-ww、ok-nte、MaaEnd，
+外加只启动、不操作的 FOS（`E:\TOOLS\ScriptsGames\MPA\FOS.exe`：自己会退出并清理，全程不需要识别与操作，
+**不要去研究它的内部逻辑**）。
+这些都属**他人项目**：本仓库只观察其窗口、只按图像定位、只发真实光标，**不改造其源码**。
 
 > 术语以 [docs/CONTEXT.md](./docs/CONTEXT.md) 为准（窗口持有者、匹配锚点、动作前置关、完成帧、静默失效……）。
 > 说话和写文档时用 CONTEXT 的词，不要另造同义词。
@@ -19,7 +21,7 @@
 | `docs/FRAMEWORK.md`        | **不变量（INV-*）+ 目标程序差异一览 + 链条结构**。断言冲突时以它为准                                                                                                                                         |
 | `docs/HANDOFF.md`          | **实现交接书**：静默失效全表、十二条硬性规则、陷阱、模块划分、产物索引                                                                                                                                             |
 | `docs/RUNBOOK.md`          | 怎么跑：GUI / 命令行参数、单节点重跑、续跑、排障                                                                                                                                                       |
-| `docs/VERDICT.md`          | **完成判定**（三程序终态口径）+ 日志窗口 + **清理策略**                                                                                                                                                |
+| `docs/VERDICT.md`          | **完成判定**（各程序终态口径，含 FOS 的进程表判据）+ 日志窗口 + **清理策略**                                                                                                                                                |
 | `docs/GUI.md`              | GUI 手册与自检记录                                                                                                                                                                       |
 | `docs/CONTEXT.md`          | **领域术语表**（说话和写文档用它的词，不要另造同义词）                                                                                                                                                     |
 | `docs/HISTORY.md`          | 实测记录与历史（含 ok-ww 窗口事实记录附录）                                                                                                                                                         |
@@ -37,13 +39,16 @@
 
 ## 动手前
 
-1. **每个程序跑自己的一份节点链**（`--target ww|nte|zmd`）。链条 = `orchestrator/apps/<key>/nodes/__init__.py`
+1. **每个程序跑自己的一份节点链**（`--target zmd|ww|nte|fos`）。链条 = `orchestrator/apps/<key>/nodes/__init__.py`
    里的 `NODES` 清单（`Node(sid, name, label, why, has_args, shared)`），主控/GUI **只按清单执行**；
-   节点数量、编号、顺序随程序（ww/nte = 1,2,4,5,6,7,8,9，只有 8 专属；zmd 的 5/6/8 专属）。
+   节点数量、编号、顺序随程序（ww/nte = 1,2,4,5,6,7,8,9，只有 8 专属；zmd 的 5/6/8 专属；
+   fos = 1,2,3,9，只有 3「等它自己退出」专属）。
    `python -X utf8 -m orchestrator.steps.main --list` 逐份打印；`--only/--from/--to` 的编号指
    **该程序自己的**编号，不在清单里的直接拒绝。为什么这么拆见 `docs/adr/0005`。
-2. **串联顺序 = `orchestrator/programs.py:ALL` 的声明顺序 = MaaEnd → ok-ww → ok-nte**（用户裁定：
-   MaaEnd 排第一，它出问题不影响后面两个）。加新程序**追加在末尾**：加一条 `Program` +
+2. **默认串联顺序 = `orchestrator/programs.py:ALL` 的声明顺序 = MaaEnd → ok-ww → ok-nte → FOS**（用户裁定：
+   MaaEnd 排第一，它出问题不影响后面两个；FOS 追加末尾）。**但顺序可任意调整**：实际顺序 =
+   `--target` 的书写顺序（主控 `run_multi` 按它逐程序跑），GUI 的 ↑/↓ 改的就是这个顺序，`ALL` 只决定默认。
+   加新程序**追加在末尾**：加一条 `Program` +
    `orchestrator/apps/<key>/__init__.py` + `nodes/__init__.py`，**不用改** `main.py` / `context.py` / GUI，
    但要同步 `gui/targets.py`。差异一览见 `docs/FRAMEWORK.md` §0.1。
 3. **归属规则**：程序专属逻辑只改 `orchestrator/apps/<key>/`。**禁止跨程序分派** —— 专属节点不得 import
@@ -58,13 +63,13 @@
 ## 动手前三条硬指令
 
 1. **改共用层之前先读 `docs/HANDOFF.md` §2**（`capture`/`input`/`window`/`state`/`frameops`/`steps/common` 都算共用层），
-   改完跑 `docs/adr/0003` 的「共用层回归清单」（三程序都要回归）。§2 的每一条都有实测依据，
+   改完跑 `docs/adr/0003` 的「共用层回归清单」（三程序都要回归；节点 1/2/9 也算 FOS 的，一并回归）。§2 的每一条都有实测依据，
    违反即**静默出错** —— 不抛异常、不返回错误码，只给错误结果。
 2. **动完代码必跑 `python -m pyflakes orchestrator gui`，再跑对应的 `probe/*_selfcheck.py` 或 `probe/_probe_gui2_selftest.py`**。
    两者互补：pyflakes 抓不到「裸名字在函数体内绕过了共用层的 `__getattr__` 垫片」，selfcheck 抓不到
    「改了阈值但没人重跑实测」。新加的行为要有探针覆盖，索引见 `probe/README.md`。
 3. **Python 用 `D:\WORKs\Anaconda\python.exe`（3.13.9），必须提权运行**。
-   可用库只有 Pillow / numpy / win32gui / win32api；三个目标程序都是 `requireAdministrator`，
+   可用库只有 Pillow / numpy / win32gui / win32api；三个操作型目标程序都是 `requireAdministrator`（FOS 未验证），
    非提权会话连杀进程都会被拒。库的范围与原因见 `docs/HANDOFF.md` §1。
 
 **规则正文只有一处**：操作红线与静默失效陷阱在 `docs/HANDOFF.md` §2，不变量在 `docs/FRAMEWORK.md` §1，

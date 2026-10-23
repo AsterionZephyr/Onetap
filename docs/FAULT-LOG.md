@@ -2120,3 +2120,83 @@ ok-nte 第一层 `E:\TOOLS\ScriptsGames\ok-nte\ok-nte.exe` vs prefix `...\ok-nte
 > 第 8 轮**没有**独立的工作日志段：它的环境基线、回归总览与"本轮改了什么"当时就散在
 > [HISTORY.md](./HISTORY.md) A.11~A.13 与 [GUI.md](./GUI.md) §7 里，不在这里重复。
 
+---
+
+## ⚠️ FAULT #38 —— FOS 节点 3 把 `frameops` 当成 `steps` 的子模块 ⇒ 四程序串联在 FOS 一步炸掉（**已修复**）
+
+**出现节点**：`orchestrator/apps/fos/nodes/step3_wait_exit.py`（第 4 个程序 FOS 唯一的专属节点）。
+**日期**：2026-10-23 05:27，首轮四程序串联 `run-20261023-050007`。
+
+**现象**：zmd / ww / nte 三段全绿之后，FOS 段只跑完节点 2（启动成功），节点 3 **在 import 阶段就死了**，
+state.json 里根本没有它的条目；主控记 `FOS 退出码 1`、整段「未通过」，并当场报出残留：
+
+```
+File "...\orchestrator\apps\fos\nodes\step3_wait_exit.py", line 18, in <module>
+    from ....steps import context, frameops
+ImportError: cannot import name 'frameops' from 'orchestrator.steps'
+  FOS      程序 1 个 [('FOS.exe', 32352)]  游戏 0 个 []
+```
+
+**根因**：`frameops.py` 在 `orchestrator/` **根下**，不在 `steps/` 包里。正确写法是
+`from .... import frameops`（同一目录的 `apps/zmd/nodes/step6_first_frame.py:24` 就是 `from .... import match`）。
+我写节点 3 时把 `frameops` 和 `context` 一起塞进了 `from ....steps import ...`。
+
+**为什么三道检查都没拦住**：
+
+1. `pyflakes` 只查名字，**不解析相对导入的目标包** —— 这条语句在语法与名字层面完全合法。
+2. `chain.check_all()` / `gui/chain.verify_against_disk()` 只断言「节点文件存在」，不看它能不能跑。
+3. GUI 的节点清单是 `ast` **静态读**出来的，那一节照常显示、照常可点。
+
+于是错误一路活到实跑那一刻 —— 又一次「静默失效」的变体：不认识这一节该产出什么，就看不出它根本没执行过。
+
+**处置**：
+
+1. 改成 `from .... import frameops` + `from ....steps import context`，并直接 `import` 该模块验证。
+2. `probe/_probe_gui2_selftest.py` 第 1 节新增断言「每节模块都能 import」：对四份链的**每一节**跑
+   `importlib.import_module(chain.module(key, row))`，失败把模块名 + 异常一并打出来（现 82 条断言）。
+   只做 `--only N` 的单节点验证永远碰不到这类错，能一次走完整条链的检查才有意义。
+3. 修复后用 `--target fos` 单跑复验（FOS 首轮实跑结论见 [HISTORY.md](./HISTORY.md)）。
+
+**来源**：`orchestrator/apps/fos/nodes/step3_wait_exit.py:18`、`probe/_probe_gui2_selftest.py` 第 1 节、
+`logs/runs/run-20261023-050007/fos/chain.log`。
+
+## ⚠️ FAULT #39 —— 「等它自己退出」的节点睡过头：主控只在节与节之间查截止时间（**已修复**）
+
+**出现节点**：`orchestrator/apps/fos/nodes/step3_wait_exit.py`（等 FOS 退出）+ `orchestrator/steps/main.py::run_one`。
+**日期**：2026-10-23 05:00–07:15，FOS 接入编排的头三轮（`run-20261023-050007` / `-052839` / `-055917`）。
+
+**现象**：两处都很安静，但错法不同 ——
+
+1. **假超时**：`--wait-timeout` 与主控 `--run-timeout` 两处默认都照抄了 1800s，而 FOS 一轮实测
+   **4379s（≈73 分钟）**。于是它每一轮都被判 TIMEOUT 并 kill，看起来"程序跑不完"，
+   而实际上是**框架不许它跑完**。
+2. **睡过头的节点把整轮拖长**：主控的 deadline 只在**节与节之间**检查（`main.py` 里逐节循环），
+   节点 3 一旦开始 sleep，主控没有任何办法打断它 ⇒ 谁把 `--wait-timeout` 调到比
+   `--run-timeout` 还大，整轮就会跑过上限，超时收尾要等它自己醒来才发生。
+
+**根因**：
+
+- 上限是**按程序**的，但当时只有一处全局默认值（1800s），没有"这个程序自己需要多久"的声明；
+- "睡得久的节点"与"节点 8 拿剩余时间当 `--total-timeout`"是同一类需求，只对节点 8 做了，
+  节点 3 没有 —— 因为节点 3 是后加的（第 4 个程序）。
+
+**处置**（三处一起，缺一处就会复发）：
+
+1. `orchestrator/programs.py`：`Program` 新增 `run_timeout` 与 `wait_flag` / `wait_sid`；
+   FOS 记 `run_timeout=5400.0`、`wait_flag="--wait-timeout"`、`wait_sid="3"`。
+2. `orchestrator/steps/main.py`：`--run-timeout` 默认改 `None`，
+   `limit = args.run_timeout if args.run_timeout is not None else (prog.run_timeout or RUN_TIMEOUT)`；
+   另外在起该程序的 wait 节点前，把**剩余墙钟**灌成它的 `--wait-timeout`
+   （用户显式给了就尊重用户值）—— 与节点 8 的 `--total-timeout` 是同一手法。
+3. `orchestrator/apps/fos/__init__.py`：`WAIT_TIMEOUT_SECONDS = 5400.0`，并在注释里写明
+   **必须与 `programs.FOS.run_timeout` 同值**。
+
+**防止复发**：`probe/_probe_gui2_selftest.py` 第 9 节断言
+`FOS.run_timeout == apps.fos.WAIT_TIMEOUT_SECONDS == 5400.0`、其余三个程序 `run_timeout is None`，
+并猴补 `subprocess.run` 实测主控注入：`--target fos` → `--wait-timeout 5400`、
+`--run-timeout 600` → `600`、显式 `--wait-timeout 120` → `120.0`。
+
+**来源**：`orchestrator/steps/main.py`（`run_one` 的 limit 与注入块）、`orchestrator/programs.py:FOS`、
+`docs/HISTORY.md` 第 9 轮、`logs/runs/run-20261023-055917/state.json`。
+
+

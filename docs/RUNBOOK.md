@@ -12,7 +12,7 @@
 | Python | 3.13.x；本机实测 `D:\WORKs\Anaconda\python.exe`（3.13.9） |
 | 依赖 | Pillow、numpy、pywin32（win32gui / win32api） |
 | 禁止引入 | `cv2`、`pyautogui`、`mss` —— 本机未安装。`C:\Python314` 四个库全无，不可用 |
-| 权限 | **管理员（提权）**。三个目标程序都是 `requireAdministrator`，非提权会话连杀进程都会被拒 |
+| 权限 | **管理员（提权）**。三个操作型目标程序都是 `requireAdministrator`，非提权会话连杀进程都会被拒；FOS 未单独核验（二进制里的 manifest 字符串是 `asInvoker`），但**框架整体仍以提权为硬前置**：节点 1 对四个程序一视同仁，节点 9 清理要提权 |
 
 - **必须提权**：这是硬前置。`--skip-admin-check` 只跳过节点 1 的自检，**不会**让节点 9 获得终止能力（未提权时节点 9 会打印「跳过：未提权，框架无力终止进程」）。
 - **独占式**（INV-15）：同一时间只跑一个目标程序；任务结束即清理相关进程。
@@ -22,34 +22,38 @@
 ## 2. 一键跑完
 
 链条**属于每个程序**：每个程序自己的清单 `orchestrator/apps/<key>/nodes/__init__.py` 决定跑哪几节。
-`--list` 按程序逐份打印（当前三份都是 1、2、4、5、6、7、8、9，**没有节点 3** —— 实机复核证明
-「跨过第一层」不存在，见 [window.py](../orchestrator/window.py) 模块说明）：
+`--list` 按程序逐份打印（当前**四份**：zmd / ww / nte 都是 1、2、4、5、6、7、8、9，**没有节点 3** ——
+实机复核证明「跨过第一层」不存在，见 [window.py](../orchestrator/window.py) 模块说明；FOS 只有四节）：
 
 ```text
 zmd / ww / nte：1 提权检查 → 2 启动 → 4 等待窗口持有者 → 5 等待窗口就绪 → 6 抓首帧并校验
               → 7 置前台 → 8 任务循环 → 9 退出与清理
+fos          ：1 提权检查 → 2 启动 FOS → 3 等它自己退出（专属；只读进程表） → 9 退出与清理
 ```
 
 节点**数量、编号、顺序随程序**，不再要求套九个；MaaEnd 的节点 5/6 是专属节点（多一道自我更新闸门 /
-先点掉更新弹窗）。为什么这么拆见 [ADR 0005](./adr/0005-per-program-node-chain.md)。
+先点掉更新弹窗）。FOS 的 3 是**它自己的**「等它自己退出」，与 ww/nte/zmd 的「缺号 3」无关：它没有
+可编排的界面（只启动、等它自己退出、清理），所以 4/5/6/7 四节在这条链上**根本不存在** —— 不是禁用。
+FOS 的设计口径见 [FRAMEWORK.md](./FRAMEWORK.md) §0.1.3。为什么这么拆见 [ADR 0005](./adr/0005-per-program-node-chain.md)。
 
 为什么拆：原先 `run()` 是 479 行一气呵成的链条，出错要打开一个大文件、从头顶重跑（1~2 分钟起），其他节点的状态也丢了。拆开后一次只开一份（1.5~18KB）、只重跑一份（秒级）；节点之间只通过 `state.json` 交接。**拆分不改变任何不变量**，INV-1..INV-43 全部保持，例如：INV-1 帧尺寸 == 窗口 rect → 节点 6 `capture.grab_frame`；INV-12 身份校验 → 节点 6 每次抓帧都做；INV-14 窗口句柄不缓存 → 每个用窗节点重新发现；INV-23 目标顶层判定 → 节点 8 [8c] `guarded_click`；INV-30 证据不足不默认成功 → 节点 8 [8e] 的终止行为与超时。
 
 节点与文件的对照**按程序**：看 `--list` 或该程序清单的 `shared` 字段 ——
 `shared=True` → `orchestrator/steps/common/<name>.py`，`shared=False` →
-`orchestrator/apps/<key>/nodes/<name>.py`。当前三份清单的对照：
+`orchestrator/apps/<key>/nodes/<name>.py`。当前四份清单的对照（FOS 只有 1/2/3/9）：
 
-| 节点 | 名称 | ok-ww / ok-nte | MaaEnd（zmd） |
-| --- | --- | --- | --- |
-| 1 | 提权检查 | 共用 [common/step1_check_admin.py](../orchestrator/steps/common/step1_check_admin.py) | 同左 |
-| 2 | 启动目标程序 | 共用 [common/step2_launch.py](../orchestrator/steps/common/step2_launch.py) | 同左 |
-| 4 | 等待窗口持有者 | 共用 [common/step4_wait_second_layer.py](../orchestrator/steps/common/step4_wait_second_layer.py) | 同左 |
-| 5 | 等待窗口就绪 | 共用 [common/step5_wait_ready.py](../orchestrator/steps/common/step5_wait_ready.py) | **专属** [zmd/nodes/step5_wait_ready.py](../orchestrator/apps/zmd/nodes/step5_wait_ready.py)（先等自我更新收敛，多 `--update-wait`） |
-| 6 | 抓首帧 + 校验 + 身份 | 共用 [common/step6_first_frame.py](../orchestrator/steps/common/step6_first_frame.py) | **专属** [zmd/nodes/step6_first_frame.py](../orchestrator/apps/zmd/nodes/step6_first_frame.py)（先点掉更新弹窗；身份证据换成本程序） |
-| 7 | 置前台 + 可用性校验 | 共用 [common/step7_foreground.py](../orchestrator/steps/common/step7_foreground.py) | 同左 |
-| 8 | 任务循环（8a 导航 / 8b 定位 / 8c 点击 / 8d 验证 / 8e 等待） | **专属** [ww/nodes/step8_run_task.py](../orchestrator/apps/ww/nodes/step8_run_task.py)、[nte/nodes/step8_run_task.py](../orchestrator/apps/nte/nodes/step8_run_task.py) | **专属** [zmd/nodes/step8_run_task.py](../orchestrator/apps/zmd/nodes/step8_run_task.py) |
-| 9 | 退出与清理 | 共用 [common/step9_cleanup.py](../orchestrator/steps/common/step9_cleanup.py) | 同左 |
-| — | 主控 / 交接面 / 清单 API | [main.py](../orchestrator/steps/main.py) / [context.py](../orchestrator/steps/context.py) / [chain.py](../orchestrator/steps/chain.py) | 同左 |
+| 节点 | 名称 | ok-ww / ok-nte | MaaEnd（zmd） | FOS（fos） |
+| --- | --- | --- | --- | --- |
+| 1 | 提权检查 | 共用 [common/step1_check_admin.py](../orchestrator/steps/common/step1_check_admin.py) | 同左 | 同左 |
+| 2 | 启动目标程序 | 共用 [common/step2_launch.py](../orchestrator/steps/common/step2_launch.py) | 同左 | 同左（label 是「启动 FOS」） |
+| 3 | 等它自己退出 | —（两程序都没有节点 3） | —（同左） | **专属** [fos/nodes/step3_wait_exit.py](../orchestrator/apps/fos/nodes/step3_wait_exit.py)（只读进程表；`--wait-timeout` / `--poll`） |
+| 4 | 等待窗口持有者 | 共用 [common/step4_wait_second_layer.py](../orchestrator/steps/common/step4_wait_second_layer.py) | 同左 | —（无此节：没有窗口要等） |
+| 5 | 等待窗口就绪 | 共用 [common/step5_wait_ready.py](../orchestrator/steps/common/step5_wait_ready.py) | **专属** [zmd/nodes/step5_wait_ready.py](../orchestrator/apps/zmd/nodes/step5_wait_ready.py)（先等自我更新收敛，多 `--update-wait`） | —（无此节） |
+| 6 | 抓首帧 + 校验 + 身份 | 共用 [common/step6_first_frame.py](../orchestrator/steps/common/step6_first_frame.py) | **专属** [zmd/nodes/step6_first_frame.py](../orchestrator/apps/zmd/nodes/step6_first_frame.py)（先点掉更新弹窗；身份证据换成本程序） | —（无此节：不抓帧） |
+| 7 | 置前台 + 可用性校验 | 共用 [common/step7_foreground.py](../orchestrator/steps/common/step7_foreground.py) | 同左 | —（无此节） |
+| 8 | 任务循环（8a 导航 / 8b 定位 / 8c 点击 / 8d 验证 / 8e 等待） | **专属** [ww/nodes/step8_run_task.py](../orchestrator/apps/ww/nodes/step8_run_task.py)、[nte/nodes/step8_run_task.py](../orchestrator/apps/nte/nodes/step8_run_task.py) | **专属** [zmd/nodes/step8_run_task.py](../orchestrator/apps/zmd/nodes/step8_run_task.py) | —（无此节：不识别、不点击） |
+| 9 | 退出与清理 | 共用 [common/step9_cleanup.py](../orchestrator/steps/common/step9_cleanup.py) | 同左 | 同左 |
+| — | 主控 / 交接面 / 清单 API | [main.py](../orchestrator/steps/main.py) / [context.py](../orchestrator/steps/context.py) / [chain.py](../orchestrator/steps/chain.py) | 同左 | 同左 |
 
 常用命令：
 
@@ -65,6 +69,9 @@ python -X utf8 -m orchestrator.steps.main --target ww,nte --pre-clean
 
 # MaaEnd（单层程序）
 python -X utf8 -m orchestrator.steps.main --target zmd --pre-clean
+
+# FOS（只启动 + 等它自己退出；没有可演练/可点击的东西）
+python -X utf8 -m orchestrator.steps.main --target fos --pre-clean
 
 # 只跑节点 8（编号 = 该程序自己清单里的节点；省略 --target 时跟随 state.json）
 python -X utf8 -m orchestrator.steps.main --only 8
@@ -95,7 +102,7 @@ GUI：双击 [launcher/gui.bat](../launcher/gui.bat)（自助请求提权）。G
 | `--python EXE` | 用来跑各节点的解释器 | 默认当前解释器 |
 | `--step-arg ARG` | 原样透传给**每一个** step | 可重复 |
 | `--target LIST` | 目标程序，语义见下表 | 省略时跟随 `state.json`；新运行默认 ok-ww |
-| `--run-timeout SEC` | 整轮墙钟上限 | 默认 `1800`（半小时）；`0` = 不限制 |
+| `--run-timeout SEC` | **每个程序**的墙钟上限 | 省略 = 用程序自己声明的：FOS `5400`、其余 `1800`（半小时）；显式值优先；`0` = 不限制 |
 | `--keep-game` | 超时收尾时**保留**游戏，只关目标程序 | 默认按用户裁定：窗口和游戏都关 |
 | `--no-watchdog` | 完全停用超时收尾 | 诊断用；挂住时要自己收拾现场 |
 
@@ -103,13 +110,20 @@ GUI：双击 [launcher/gui.bat](../launcher/gui.bat)（自助请求提权）。G
 
 | 写法 | 行为 |
 | --- | --- |
-| `ww` / `nte` / `zmd` | 单个程序，运行目录就是 `--run-dir` |
+| `ww` / `nte` / `zmd` / `fos` | 单个程序，运行目录就是 `--run-dir` |
 | `ww,nte` | 串联，**按书写顺序**（不是清单顺序）；各占子目录 `<run-dir>/ww`、`<run-dir>/nte` |
-| `all` / `both` | 全部程序，按 [programs.py](../orchestrator/programs.py) 的 `ALL` 声明顺序 = **MaaEnd → ok-ww → ok-nte**；`both` 是 2026-10 的历史写法，永久保留 |
+| `all` / `both` | 全部程序，按 [programs.py](../orchestrator/programs.py) 的 `ALL` 声明顺序 = **MaaEnd → ok-ww → ok-nte → FOS**；`both` 是 2026-10 的历史写法，永久保留 |
 | 分隔符 | 英文逗号、中文逗号、`+`、空格都接受；重复项去重，保留首次位置 |
 | 未知 key | 立刻报错，连 `--list` 也报；错误信息列出全部已知 key |
 | `all,ww` | 报错：全量别名不可与具体 key 混用 |
 | 单节点 | **一个节点只能跑一个程序**；把 `--target ww,nte` 传给单个节点会直接报错。共用节点用 `--target` 指明程序，专属节点由模块路径（`orchestrator.apps.<key>.nodes.*`）指明 |
+
+`--target` 的**书写顺序就是执行顺序**（主控按它逐程序跑）。`all` 用的是 `ALL` 的默认序，
+想换顺序就显式写出来（`--target fos,ww` 先跑 FOS 再跑 ok-ww）；GUI 的 ↑/↓ 改的也是这个顺序（[GUI.md](./GUI.md) §2.1）。
+
+> **`fos`（FOS）**是第 4 个程序：`E:\TOOLS\ScriptsGames\MPA\FOS.exe`。它**没有可编排的界面**，链上只有
+> 4 节（1 → 2 → 3 → 9），节点 3 是「等它自己退出」（只读进程表，默认上限 **5400s**、采样 1.0s）。
+> 因此 `--only/--from/--to` 只有 **1、2、3、9** 这四个编号有效；`--target all` 把它排在最后。
 
 透传给特定节点的参数（主控不解释，只转发）：
 
@@ -117,13 +131,25 @@ GUI：双击 [launcher/gui.bat](../launcher/gui.bat)（自助请求提权）。G
 | --- | --- | --- |
 | `--skip-admin-check` | 1 | 跳过提权自检（诊断用；此后不会执行任何清理） |
 | `--no-launch` | 2 | 不启动程序，假定已在运行 |
+| `--wait-timeout S` | 3（仅 FOS） | 等 FOS 自行退出的上限（默认 5400；省略时主控把**剩余墙钟**灌进来） |
+| `--poll S` | 3（仅 FOS） | 进程表采样间隔（默认 1.0） |
 | `--only-locate` | 8 | 只跑导航 + 定位，不点击、不等待 |
 | `--freeze-seconds S` | 8 | 计时器冻结多少秒判超时（默认 180） |
 | `--total-timeout S` | 8 | 节点 8 兜底上限（默认 1800） |
 | `--stall-grace S` | 8 | 执行器暂停后给它多少秒自行恢复，仍无进展才判 STALLED（默认 90） |
 | `--force-clean` | 9 | 忽略结果，强制走清理路径 |
 
-时间上限从高到低是三层：`--run-timeout`（整轮，默认 1800）→ `--total-timeout`（节点 8，默认 1800）→ `--freeze-seconds`（等待态冻结，默认 180）。到点由 watchdog 关目标窗口与游戏（`--keep-game` 保留游戏），必要时杀进程，并写 `state.json` 的 `watchdog` 字段。
+时间上限从高到低是三层：`--run-timeout`（每程序墙钟，默认 FOS 5400 / 其余 1800）→ `--total-timeout`（节点 8，默认 1800）→ `--freeze-seconds`（等待态冻结，默认 180）。到点由 watchdog 关目标窗口与游戏（`--keep-game` 保留游戏），必要时杀进程，并写 `state.json` 的 `watchdog` 字段。
+FOS 多一种：节点 3 的 `--wait-timeout`（默认 5400，与 `programs.FOS.run_timeout` 同值）。到点它只回报 `TIMEOUT`、
+**自己不动手**；主控此时也已到点 ⇒ 走 watchdog 收尸，杀 `FOS.exe`（`run-20261023-052839` 实测 8s 内清干净）。
+
+> **为什么 FOS 是 5400s**：实测它自然退出要 **4379s（≈73 分钟）**（`run-20261023-055917`，
+> HISTORY 第 9 轮）。照抄主控默认的 30 分钟会把还没跑完的它掐掉。
+
+这两把闸**不需要手动对齐**：主控发现该程序的 `wait_flag`（FOS 是 `--wait-timeout`）时，
+会把**剩余墙钟**当上限灌进去；命令行显式给了 `--wait-timeout` 则尊重你的值。
+⚠️ 显式给的值**不要大于** `--run-timeout`：节点 3 一开始睡，主控就只能在节与节之间查
+截止时间，睡过头的节点会把整轮拖长（到期收尾仍会发生，只是晚）。
 
 ## 4. 只跑一个节点 / 断点续跑 / 串联多目标
 
@@ -167,11 +193,23 @@ python -X utf8 -m <mod> --run-dir "<run-dir>"
 python -X utf8 -m orchestrator.steps.main --resume --run-dir "<run-dir>" --from <N>
 ```
 
-**串联多目标**（`--target ww,nte` / `all`）有三个要点：
+**串联多目标**（`--target ww,nte` / `all` / 任意书写顺序）有三个要点：
 
-1. **各占一个子目录**：`<run-dir>/ww`、`<run-dir>/nte`。若共用同一目录，两轮的 `step8.log` 会互相覆盖，事后分不清是哪个程序的。
+1. **各占一个子目录**：`<run-dir>/ww`、`<run-dir>/nte`、`<run-dir>/fos` —— 选了几个就有几个。若共用同一目录，两轮的 `step8.log` 会互相覆盖，事后分不清是哪个程序的。
 2. **一个程序失败不中断另一个**（用户裁定：可无人值守）；全部跑完后退出码仍非 0。
 3. **每轮各自独立计 30 分钟上限**；串联**不是并发**，沿用 INV-15 的独占前提，严格串行。
+
+```powershell
+# 按书写顺序串四个：FOS 排最后（它只启动 + 等自己退出，不抢界面、不判画面）
+python -X utf8 -m orchestrator.steps.main --target zmd,ww,nte,fos --pre-clean
+
+# 先跑 FOS 再跑 ok-ww —— 顺序就是写出来的顺序，不是清单顺序
+python -X utf8 -m orchestrator.steps.main --target fos,ww --pre-clean
+```
+
+> FOS 那一段**只能观察、不能操作**：链上没有节点 8，所以 `--target fos --only 8` 会被当场拒绝。
+> 手工接管一个已在跑的 FOS：`python -X utf8 -m orchestrator.apps.fos.nodes.step3_wait_exit --run-dir "<run-dir>"`
+> （专属节点，模块路径里已有程序，**不用** `--target`；`<run-dir>/state.json` 要先存在，见 §4 开头）。
 
 全部跑完会做一次**跨程序残留复检**：ok-nte 正常完成只关游戏本体 `HTGame.exe`，launcher `NTEGame.exe` 会残留（FAULT #31）。要清干净就再跑一次 `--pre-clean`，或对单一程序单跑共用节点 9：
 `python -X utf8 -m orchestrator.steps.common.step9_cleanup --force`。
@@ -300,16 +338,36 @@ python -X utf8 -m orchestrator.steps.common.step4_wait_second_layer --run-dir "<
 
 ## 8. 加第 N 个程序要改哪里
 
-加程序**不用改引擎**（[main.py](../orchestrator/steps/main.py) / [context.py](../orchestrator/steps/context.py) /
-GUI 代码），只做这三步：
+加程序**不用改引擎的骨架**（[main.py](../orchestrator/steps/main.py) 的循环 / [context.py](../orchestrator/steps/context.py) /
+GUI 代码）—— 第 4 个程序 FOS 加进来时引擎一行没动。后来为了「睡得久的节点」才给引擎加了两个
+**声明式**钩子（`Program.run_timeout`、`Program.wait_flag/wait_sid`，见第 3 步），仍然**没有**
+`if prog.key == ...` 这种分支。只做这三步：
 
-1. 在 [programs.py](../orchestrator/programs.py) 的 `ALL` **追加**一条 `Program(key=..., display=..., exe=..., ...)`。顺序即默认串联顺序：MaaEnd 必须排第一，`targets.self_check()` 有一条断言守着「第一个必须是 zmd」；新程序追加在末尾。
+1. 在 [programs.py](../orchestrator/programs.py) 的 `ALL` **追加**一条 `Program(key=..., display=..., exe=..., ...)`。顺序即**默认**串联顺序（实际顺序看 `--target` 的书写顺序）：MaaEnd 必须排第一，`targets.self_check()` 有一条断言守着「第一个必须是 zmd」；新程序追加在末尾 —— FOS 就排在最后，`ALL = [ZMD, WW, NTE, FOS]`。
 2. 新建 `orchestrator/apps/<key>/__init__.py`（该程序的定位 + 身份证据 + 终态判据，照 `apps/ww/__init__.py` 抄骨架），并在 [apps/__init__.py](../orchestrator/apps/__init__.py) 的 `ADAPTERS` 里注册。
 3. 新建 `orchestrator/apps/<key>/nodes/__init__.py`：`NODES` 清单，逐条写清**这个程序跑哪几节**（共用节点也要写），元素是 `Node(sid, name, label, why, has_args, shared)`。需要专属节点就放 `orchestrator/apps/<key>/nodes/stepN_*.py`，文件末尾用 `context.run_step(..., chain_key="<key>")` 收尾。
+   若这个程序有**「等它自己退出」那种会长时间 sleep 的节点**（FOS 的节点 3 就是），两件事一起做：
+   给它一条 `run_timeout=<实测耗时 + 余量>`（省略 = 主控默认 1800s），并声明 `wait_flag="--wait-timeout"` +
+   `wait_sid="3"`（主控据此把**剩余墙钟**灌进去）。理由见 [FAULT #39](./FAULT-LOG.md)。
 
 再同步 [gui/targets.py](../gui/targets.py) 的 `FALLBACK`：那是 GUI 的**第二处**声明，不同步界面会报「清单漂移」（仍以磁盘上的 `programs.py` 为准）。
 
-[targets.py](../orchestrator/targets.py) 与 GUI 的多选清单都从 `ALL` 派生。改共用层（`capture` / `input` / `window` / `state` / `frameops` / `steps/common`）必须三程序回归，清单见 [ADR 0003](./adr/0003-per-program-app-modules.md)。
+[targets.py](../orchestrator/targets.py) 与 GUI 的多选清单都从 `ALL` 派生。改共用层（`capture` / `input` / `window` / `state` / `frameops` / `steps/common`）必须三程序回归，清单见 [ADR 0003](./adr/0003-per-program-app-modules.md)（节点 1/2/9 也是 FOS 的，FOS 一并回归）。
+
+**样板：FOS 是「最省的一档」**（第 4 个程序，2026-10-23 接入；设计口径见 [FRAMEWORK.md](./FRAMEWORK.md) §0.1.3）。
+它证明**加程序可以完全不需要界面**：
+
+- `orchestrator/apps/fos/nodes/__init__.py` 的 `NODES` 只有四条：`1` 提权检查、`2` 启动（都 `shared=True`）、
+  `3` 等它自己退出（`has_args=True, shared=False`）、`9` 退出与清理（`shared=True`）。
+- **只有节点 3 是专属的**：[fos/nodes/step3_wait_exit.py](../orchestrator/apps/fos/nodes/step3_wait_exit.py) ——
+  只读进程表、等它自己退出；专属参数 `--wait-timeout`（默认 5400s）与 `--poll`（默认 1.0s）。
+- **没有图像资产、没有身份判据、没有日志判据**：`apps/fos/__init__.py` 只做「进程归属 + 等待」两件事，
+  `templates/` 一行都不用加；`Program` 里那几个字段（标题正则、最小尺寸）对它永远不会被用到。
+- 归属判据放宽到**整个安装目录**（PyInstaller 会把 `MFWUpdater.exe` 等子进程散在目录各处）。这在 MPA
+  目录里安全 —— 那里没有被编排的其它程序；**换到别的目录要先确认这一点**，否则扩容即误杀（FAULT #32 型）。
+
+> 反过来：**要操作界面**的程序照 ww / nte / zmd 抄（节点 8 必须专属、资产要采、身份与终态判据要自己写）。
+> FOS 不是那类样板 —— 它连节点 8 都没有。
 
 ## 9. 阈值与资产的注意点
 
@@ -335,6 +393,7 @@ GUI 代码），只做这三步：
 | 节点 6 只证明「在不在该程序」，不证明「在不在任务页」 | 导航是节点 8 [8a] 的职责；看到应用更新页 / 别的页面时看节点 8 的重定位 | 设计分工 |
 | `UNKNOWN` / `STALLED` 需要人判 | `UNKNOWN` 是特性（证据不足不默认成功）；`STALLED` 是执行器暂停后的有界等待（默认 90s） | INV-30 / FAULT #30 |
 | 串联时的前台锁 | **已证实**：紧接上一程序退出后置前台可能失败，编排目前没有显式目标间等待；节点 7 失败先等 10 秒再重跑 | INV-42 |
+| FOS 的超时参数不在 GUI 里 | 节点 3 的 `--poll`（默认 1.0s）**只能从命令行传**：GUI 只暴露「只跑节点 N」，不暴露节点透传参数。`--wait-timeout` 有默认 5400s、且主控会把剩余墙钟灌进去，所以 GUI 直接跑 FOS 是够的；要调就命令行跑 `--target fos --run-timeout N` | 节点 3 |
 | 跨程序残留 | ok-nte 正常完成会把 launcher `NTEGame.exe` 留在后台，靠收尾的跨程序复检报告出来，不自动杀 | FAULT #31 |
 
 ## 11. 日志保留（只留最近十轮）

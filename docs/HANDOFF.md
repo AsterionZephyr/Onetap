@@ -1,4 +1,4 @@
-# 实现交接书：ok-ww / ok-nte / MaaEnd 黑盒编排
+# 实现交接书：ok-ww / ok-nte / MaaEnd 黑盒编排（+ FOS 只启动不操作）
 
 > **读者：接手的 agent。** 你不需要重读全部探测脚本，但**必须**读完本文的「必须遵守的约束」。
 > 详细依据见 [FRAMEWORK.md](./FRAMEWORK.md)（不变量 + 目标程序差异一览；实测过程在 [HISTORY.md](./HISTORY.md)）。
@@ -11,8 +11,15 @@
 在**进程外**、以**真实光标**、**黑盒**地操作 ok-ww、ok-nte、MaaEnd：
 启动 → 导航到任务页 → 点「开始」→ 等待任务完成 → 确认终态（前两个看进程退出，MaaEnd 看日志）。
 
-**三个程序均已端到端验证可行**（ok-ww：[HISTORY A.8](./HISTORY.md)；ok-nte 与 MaaEnd：FRAMEWORK §0.1 与 [HISTORY A.9-A.13](./HISTORY.md)）。
-**最终目标是按顺序启动这些程序完成任务**（顺序 = MaaEnd → ok-ww → ok-nte，见 [RUNBOOK.md](./RUNBOOK.md)）。
+**三个操作型程序均已端到端验证可行**（ok-ww：[HISTORY A.8](./HISTORY.md)；ok-nte 与 MaaEnd：FRAMEWORK §0.1 与 [HISTORY A.9-A.13](./HISTORY.md)）。
+
+**第 4 个程序 FOS（`E:\TOOLS\ScriptsGames\MPA\FOS.exe`）只启动、不操作**：用户裁定它自己会退出并
+清理干净，全程不需要识别与操作，**也不要研究它的内部逻辑**。链条 4 节（1 提权 → 2 启动 →
+3 等它自己退出 → 9 清理），详见 [FRAMEWORK.md](./FRAMEWORK.md) §0.1.3 与 [VERDICT.md](./VERDICT.md) §2.1。
+
+**最终目标是按顺序启动这些程序完成任务**。默认顺序 = MaaEnd → ok-ww → ok-nte → FOS
+（= `programs.ALL` 的声明顺序），**但顺序可任意调整**：实际顺序 = `--target` 的书写顺序，
+GUI 的 ↑/↓ 改的就是它（见 [GUI.md](./GUI.md) §2.1、[RUNBOOK.md](./RUNBOOK.md) §4）。
 
 ## 1. 环境（实测确定，不要改）
 
@@ -25,8 +32,9 @@
 | ok-ww 可执行 | `E:\TOOLS\ScriptsGames\ok-ww\ok-ww.exe` |
 | ok-nte 可执行 | `E:\TOOLS\ScriptsGames\ok-nte\ok-nte.exe` |
 | MaaEnd 可执行 | `E:\TOOLS\ScriptsGames\zmd\MaaEnd.exe`（单层程序，日志在 `zmd\debug\mxu-tauri.log`） |
+| FOS 可执行 | `E:\TOOLS\ScriptsGames\MPA\FOS.exe`（单文件 PyInstaller，**只启动 + 等它自己退出**，无识别无操作） |
 | 本机屏幕 | 2560×1440 物理 |
-| **必须提权运行** | 三个程序都是 `requireAdministrator`；非提权会话连杀进程都会被拒 |
+| **必须提权运行** | 三个操作型程序都是 `requireAdministrator`；非提权会话连杀进程都会被拒（FOS 是否要求提权**未验证**，节点 1 仍先查提权） |
 | 远程软件 | GameViewer 在运行（会改缩放；**不要依赖固定分辨率**） |
 
 **抓图**：`ctypes` + `BitBlt`（见 `probe/capture.py`）。
@@ -169,18 +177,23 @@ orchestrator/
 └── assets.json    当前加载的资产清单
 ```
 
-⇒ **`window` / `capture` / `match` / `input` 四个模块的设计目标就是三程序共用**，
+⇒ **`window` / `capture` / `match` / `input` 四个模块的设计目标就是三个操作型程序共用**（FOS 不用它们：它不抓帧、不匹配、不点击），
 新增程序时加一条 `Program` + `apps/<key>/`（含 `nodes/` 清单），而非复制代码。
 反向的纪律同样重要：**专属逻辑不许写回共用文件**（ADRs 0003）—— 写回去就等于恢复
 「改 A 波及 B」，且波及是静默的。
 
 ### 5.1 多目标配置形态（已落地为 `orchestrator/programs.py`）
 
-> ✅ 已实现：`Program` 数据类 + `programs.get("ww"|"nte"|"zmd")`，`ALL` 是唯一来源；
-> 链条属于每个程序（`apps/<key>/nodes/__init__.py` 的 `NODES`，节点数/编号/顺序随程序，见 ADR 0005），`--target ww|nte|zmd|all`（`both` 是历史别名）。
+> ✅ 已实现：`Program` 数据类 + `programs.get("ww"|"nte"|"zmd"|"fos")`，`ALL` 是唯一来源；
+> 链条属于每个程序（`apps/<key>/nodes/__init__.py` 的 `NODES`，节点数/编号/顺序随程序，见 ADR 0005），
+> `--target zmd|ww|nte|fos|all`（`both` 是历史别名）；**多个时按书写顺序执行**，`ALL` 只决定默认顺序。
 >
 > ⚠️ 两条与旧原型的实测修正：**`hwnd` 绝不进配置**（硬性规则 2）；**窗口尺寸不做常量约定**（硬性规则 1，
 > 资产按 INV-39 归一化比例匹配）。字段名以 `programs.py` 为准，本文件不再抄一份。
+>
+> ⚠️ 时间上限是**按程序**的：`Program.run_timeout`（省略 = 主控默认 1800s；FOS = 5400s，实测 73 分钟）
+> 与 `Program.wait_flag` / `wait_sid`（「等它自己退出」的节点；主控会把**剩余墙钟**灌进那个旗标）。
+> 为什么必须成对：主控只在节与节之间查截止时间，睡得久的节点自己不许上限就会拖过整轮 —— FAULT #39。
 >
 > ⚠️ 未收敛：ok-ww 身份锚点现用 `1_ww.png`（侧栏图标），而 FRAMEWORK §4.4 推荐 **☰ 菜单图标**
 > （1458×800 下 1_ww 实测仅 0.3962）。
@@ -198,7 +211,7 @@ orchestrator/
 
 原先这部分写在 [CONTEXT.md](./CONTEXT.md) 的术语条目里（术语表不该做实现索引，见 [ADR 0007](./adr/0007-doc-layering-single-source.md)），搬到这里：
 
-- **清单元素**：`Node(sid, name, label, why, has_args, shared)`。`sid` 是**该程序清单内**的编号（不连续是刻意的——没有节点 3）；`has_args=True` 表示该节点有程序专属参数（GUI 行尾标 ★）；`shared` 区分共用节点与专属节点。
+- **清单元素**：`Node(sid, name, label, why, has_args, shared)`。`sid` 是**该程序清单内**的编号（不连续是刻意的——三个操作型程序的链条里没有节点 3；FOS 的 3 是它自己的「等它自己退出」）；`has_args=True` 表示该节点有程序专属参数（GUI 行尾标 ★）；`shared` 区分共用节点与专属节点。
 - **清单位置**：`orchestrator/apps/<key>/nodes/__init__.py` 的 `NODES` 字面量。它是「这个程序跑哪几节」的**唯一出处**：`--list`、主控（`steps/main.py`）与 GUI 都只读它。
 - **共用节点**（`shared=True`）：实现固定在 `orchestrator/steps/common/<name>.py`，**不认识任何具体程序**；程序差异只能经下列钩子参数传入。
 
