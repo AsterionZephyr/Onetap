@@ -13,8 +13,14 @@
   5. 编辑器增量高亮 vs 全量高亮：逐 tag 一致 + 常数时间
   6. 运行中禁止保存的守卫
   7. 路径固定：编辑器只认**当前程序清单里**的节点文件
+  8. 目标程序选择器：任意多选 + 任意顺序（↑/↓、↺ 默认序、屏幕次序 = _order）
+  9. 每节模块都**能 import**（抓相对导入写错 —— 那种错 pyflakes 安静放过，
+     GUI 也照常显示，只有实跑到那一步才炸）
+ 10. FOS 的等待上限：Program.run_timeout ↔ apps/fos.WAIT_TIMEOUT_SECONDS ↔ 主控
+     把「剩余墙钟」灌进节点 3 的 --wait-timeout（GUI 不暴露这两个参数，不同值就会假超时）
 """
 
+import importlib
 import os
 import sys
 import time
@@ -26,6 +32,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from gui import chain                      # noqa: E402
+from orchestrator import programs           # noqa: E402
 from gui.app import App                    # noqa: E402
 from gui.editor import CodeEditor          # noqa: E402
 
@@ -48,24 +55,52 @@ print("=" * 74)
 
 # ---------------------------------------------------------------- 1
 print("\n1. 每个程序的节点清单与磁盘一致")
+# 链条形状每份都不同（docs/adr/0005），所以这张表必须逐程序钉死。
+# 加程序 / 改某程序的链条时**同步改这里** —— 它同时也在防止「GUI 悄悄按
+# 一张硬编码的总表画」，那正是当初拆成每程序一份清单要避免的事。
+EXPECT = {
+    "zmd": (["1", "2", "4", "5", "6", "7", "8", "9"], {"5", "6", "8"}),
+    "ww": (["1", "2", "4", "5", "6", "7", "8", "9"], {"8"}),
+    "nte": (["1", "2", "4", "5", "6", "7", "8", "9"], {"8"}),
+    # FOS（MPA）：没有可编排界面 —— 只启动 + 等它自己退出。4/5/6/7 这四节
+    # 在这条链上**根本不存在**；3 是它自己的「等它自己退出」（不是缺号 3）。
+    "fos": (["1", "2", "3", "9"], {"3"}),
+}
 keys = chain.keys()
-check("程序顺序 = programs.ALL（zmd, ww, nte）",
-      keys == ["zmd", "ww", "nte"], str(keys))
+check("程序顺序 = programs.ALL",
+      keys == [p.key for p in programs.ALL], str(keys))
+check("每个程序都有掐死的链条形状", set(keys) == set(EXPECT),
+      f"多={sorted(set(keys) - set(EXPECT))} 少={sorted(set(EXPECT) - set(keys))}")
 problems = chain.verify_against_disk()
 check("清单无漂移", not problems,
       "" if not problems else "\n     " + "\n     ".join(problems))
-EXPECTED_IDS = ["1", "2", "4", "5", "6", "7", "8", "9"]
 for key in keys:
+    ids_want, owned_want = EXPECT[key]
     rows = chain.nodes(key)
-    check(f"{key} 节点数 = 8", len(rows) == 8, f"{len(rows)} 节")
-    check(f"{key} 编号沿用原编号（无 3）",
-          chain.ids(key) == EXPECTED_IDS, str(chain.ids(key)))
+    check(f"{key} 节点数 = {len(ids_want)}",
+          len(rows) == len(ids_want), f"{len(rows)} 节")
+    check(f"{key} 编号 = {ids_want}",
+          chain.ids(key) == ids_want, str(chain.ids(key)))
     missing = [r[0] for r in rows
                if not os.path.isfile(chain.step_file(key, r))]
     check(f"{key} 每节的文件都存在", not missing, str(missing))
     owned = {r[0] for r in rows if not row_of(key, r[0])["shared"]}
-    want = {"5", "6", "8"} if key == "zmd" else {"8"}
-    check(f"{key} 专属节点 = {sorted(want)}", owned == want, str(sorted(owned)))
+    check(f"{key} 专属节点 = {sorted(owned_want)}",
+          owned == owned_want, str(sorted(owned)))
+
+# 「文件存在」不等于「能跑」：相对导入层级写错时 pyflakes 一声不响，GUI 也照常
+# 显示那一节，直到实跑到它才 ImportError —— FOS 首轮就踩过（frameops 在
+# orchestrator/ 根下，不在 steps 包里）。这里把四份链的每一节都 import 一次。
+bad_import = []
+for key in keys:
+    for row in chain.nodes(key):
+        mod = chain.module(key, row)
+        try:
+            importlib.import_module(mod)
+        except Exception as e:                       # noqa: BLE001 —— 探针要留原因
+            bad_import.append(f"{mod}: {type(e).__name__}: {e}")
+check("每节模块都能 import", not bad_import,
+      "" if not bad_import else "\n     " + "\n     ".join(bad_import))
 
 # ---------------------------------------------------------------- 2
 print("\n2. App 无头构建")
@@ -371,10 +406,133 @@ check("节点 3 -> 保存按钮禁用",
       str(app.btn_save.cget("state")) == "disabled",
       str(app.btn_save.cget("state")))
 
+# ---------------------------------------------------------------- 8
+print("\n8. 目标程序选择器：任意多选 + 任意顺序（↑/↓）")
+# 用户 2026-10-23 的要求：「可以任意调整程序运行顺序」。
+# 顺序存在 app._order 里，↑/↓ 改它并重排行；勾选与否单独决定跑不跑。
+app.follow_var.set(False)          # 顺序只在手动模式有意义
+
+
+def row_pack_order():
+    """按 pack 顺序取出行对应的 key —— 这**就是**屏幕上看到的次序。"""
+    out = []
+    for child in app._rows_box.pack_slaves():
+        for k, r in app._target_rows.items():
+            if r["row"] is child:
+                out.append(k)
+    return out
+
+
+base = [k for k, _d in app_mod.TARGET_PROGRAMS]
+check("初始顺序 = 清单声明顺序",
+      app._order == base and row_pack_order() == base,
+      f"{app._order} / {row_pack_order()}")
+check("初始序号 1..N",
+      [app._target_rows[k]["idx"].cget("text") for k in base]
+      == [str(i + 1) for i in range(len(base))])
+check("首行 ↑ 禁用",
+      str(app._target_rows[base[0]]["up"].cget("state")) == "disabled")
+check("末行 ↓ 禁用",
+      str(app._target_rows[base[-1]]["down"].cget("state")) == "disabled")
+
+last = base[-1]
+app._move_target(last, -1)
+app.update()
+want = base[:-2] + [last, base[-2]]
+check("↑ 上移一格", app._order == want, str(app._order))
+check("行也跟着重排（屏幕次序 = _order）", row_pack_order() == want,
+      str(row_pack_order()))
+check("序号跟着重排",
+      [app._target_rows[k]["idx"].cget("text") for k in want]
+      == [str(i + 1) for i in range(len(want))])
+
+app._move_target(app._order[0], -1)
+app.update()
+check("首行再上移 = 无变化（越界不重排）", app._order == want, str(app._order))
+
+# 把**同一个**末行一直往上挪到首位（每次只挪一格），验证首位 ↑ 被禁掉
+tail_key = app._order[-1]
+for _ in range(len(base)):
+    app._move_target(tail_key, -1)
+app.update()
+check("一直上移 -> 该行到首位",
+      app._order == [tail_key] + [k for k in base if k != tail_key],
+      str(app._order))
+check("首位 ↑ 禁用",
+      str(app._target_rows[app._order[0]]["up"].cget("state")) == "disabled")
+check("末位 ↓ 禁用",
+      str(app._target_rows[app._order[-1]]["down"].cget("state")) == "disabled")
+
+# 勾选与顺序解耦：只勾两项，返回顺序必须按 _order，而不是点击先后
+app.on_select_none()
+for k in app._order[:2]:
+    app.target_vars[k].set(True)
+check("勾选结果 = 按 _order 过滤",
+      app.selected_targets() == app._order[:2], str(app.selected_targets()))
+
+# 「↺ 默认序」复位
+app.on_default_order()
+app.update()
+check("↺ 默认序 复位", app._order == base and row_pack_order() == base,
+      str(app._order))
+
+# 改顺序必须自动关掉「跟随记录」，否则改了不生效却毫无提示（静默失效）
+app.follow_var.set(True)
+app._move_target(app._order[-1], -1)
+check("改顺序时自动关掉『跟随记录』", app.follow_var.get() is False)
+app.on_default_order()
+app.follow_var.set(False)
+app.update()
+
 try:
     app.destroy()
 except tk.TclError:
     pass
+
+# ---------------------------------------------------------------- 9
+print("\n9. FOS 的等待上限：程序声明 ↔ 节点默认 ↔ 主控注入")
+# 实测一轮 4379s（≈73 分钟，HISTORY 第 9 轮）⇒ 三处必须同值。GUI 不暴露这两个参数，
+# 任何一处更小，都会在 GUI 里把还没跑完的 FOS 掐掉（而且表现为「超时」不是「失败」，很容易误判）。
+from orchestrator.apps import fos as fos_app          # noqa: E402
+import orchestrator.steps.main as main_mod            # noqa: E402
+
+fos_prog = programs.get("fos")
+check("FOS.run_timeout == apps.fos.WAIT_TIMEOUT_SECONDS",
+      fos_prog.run_timeout == fos_app.WAIT_TIMEOUT_SECONDS,
+      f"{fos_prog.run_timeout} vs {fos_app.WAIT_TIMEOUT_SECONDS}")
+check("FOS 上限 = 5400s（实测 4379s + 余量）",
+      fos_prog.run_timeout == 5400.0, str(fos_prog.run_timeout))
+check("三个操作型程序没有 per-program 上限（沿用 1800s）",
+      all(programs.get(k).run_timeout is None for k in ("zmd", "ww", "nte")))
+check("只有 FOS 声明了 wait 节点",
+      fos_prog.wait_flag == "--wait-timeout" and fos_prog.wait_sid == "3"
+      and all(programs.get(k).wait_flag is None for k in ("zmd", "ww", "nte")))
+
+# 主控必须把「剩余墙钟」灌进 wait 节点：节点一开始睡，主控就只能在节与节之间
+# 查 deadline ⇒ 睡过头的节点会把整轮拖长。猴补 subprocess.run，只看拼出的命令行。
+_calls, _orig_run = [], main_mod.subprocess.run
+
+
+class _R0:
+    returncode = 0
+
+
+main_mod.subprocess.run = lambda cmd, cwd=None: (_calls.append(list(cmd)), _R0())[1]
+try:
+    for argv, want in ((["--target", "fos"], "5400"),
+                       (["--target", "fos", "--run-timeout", "600"], "600"),
+                       (["--target", "fos", "--wait-timeout", "120"], "120.0")):
+        _calls.clear()
+        _a = main_mod.build_parser().parse_args(argv)
+        main_mod.run_one(_a, lambda *a_, **k_: None, fos_prog, "logs/__probe",
+                         ["1", "2", "3", "9"])
+        hit = [c for c in _calls if "step3_wait_exit" in " ".join(c)]
+        val = (hit[0][hit[0].index("--wait-timeout") + 1]
+               if hit and "--wait-timeout" in hit[0] else "")
+        check(f"主控给节点 3 的 --wait-timeout = {want}", val == want,
+              f"{argv} -> {val or '未注入'}")
+finally:
+    main_mod.subprocess.run = _orig_run
 
 print("\n" + "=" * 74)
 if FAIL:

@@ -55,6 +55,11 @@ def build_app(root):
     a.follow_var = tk.BooleanVar(master=root, value=True)
     a.target_vars = {k: tk.BooleanVar(master=root, value=True)
                      for k, _d in A.TARGET_PROGRAMS}
+    # --- 执行顺序 ---------------------------------------------------------
+    # 2026-10-23 起顺序**可变**（GUI 的 ↑/↓ 改的就是它），App 用 self._order
+    # 保存当前顺序。这里必须显式给初值：App.__new__ 没跑 tk.Tk.__init__，
+    # 没设过的属性会落到 tkinter 的 __getattr__ 上无限递归（不是 AttributeError）。
+    a._order = [k for k, _d in A.TARGET_PROGRAMS]
     a.python_var = tk.StringVar(master=root, value=sys.executable)
     a.editor = type("E", (), {"is_dirty": lambda self: False})()
     a.selected = None
@@ -70,6 +75,10 @@ def build_app(root):
     a.set_current = lambda *a_, **k_: None
     a._set_target_controls = lambda *a_, **k_: None
     a._repaint_steps = lambda *a_, **k_: None
+    # on_run 末尾会 _sync_scope() 重建两页的节点行 —— 对「拼了什么 argv」是噪声，
+    # 而 stub 外壳里没有 run_list 等控件：_sync_scope 的 hasattr(self, "run_list")
+    # 会落到 tkinter 的 __getattr__ 上无限递归。故只在这里 stub 掉画面同步。
+    a._sync_scope = lambda *a_, **k_: None
     a._refresh_target_dots = lambda *a_, **k_: None
 
     class FakeBtn:
@@ -139,8 +148,8 @@ def main():
                 fail.append(f"只勾 {key}: 期望 {want}，实得 {got}")
             print(f"  [{'OK ' if ok else 'FAIL'}] 只勾 {key:4s} -> {got}")
 
-        # --- 2. 多目标：顺序 = 清单声明顺序 ------------------------------
-        print("\n2. 多选 -> --target a,b（顺序 = 清单声明顺序）")
+        # --- 2. 多目标：默认顺序 = 清单声明顺序 --------------------------
+        print("\n2. 多选 -> --target a,b（默认顺序 = 清单声明顺序）")
         ks = [k for k, _d in A.TARGET_PROGRAMS]
         a = build_app(root)
         picked(a, list(reversed(ks)))          # 故意反着点
@@ -161,6 +170,34 @@ def main():
         if not ok:
             fail.append(f"全选: 期望 {need}，实得 {got}")
         print(f"  [{'OK ' if ok else 'FAIL'}] 全选 -> {got}")
+
+        # --- 2b. 任意顺序：GUI 的 ↑/↓ 改的就是 --target 的排列 -----------
+        # 用户 2026-10-23 的要求：「可以任意调整程序运行顺序」。顺序存在
+        # App._order 里；这里直接把 _order 改成反序，看 on_run 是否照它拼。
+        print("\n2b. 任意顺序 -> --target 按 _order 排列（不是声明序）")
+        rev = list(reversed(ks))
+        a = build_app(root)
+        picked(a, ks)
+        a._order = rev
+        a.on_run()
+        got = a.runner.calls[-1][1]
+        want = ["--target", ",".join(rev)]
+        ok = got == want
+        if not ok:
+            fail.append(f"反序执行: 期望 {want}，实得 {got}")
+        print(f"  [{'OK ' if ok else 'FAIL'}] 改序后全选 -> {got}")
+
+        # 只勾一部分时，顺序仍只由 _order 决定（不是勾选先后、也不是声明序）
+        a = build_app(root)
+        picked(a, [ks[0], ks[-1]])
+        a._order = rev
+        a.on_run()
+        got = a.runner.calls[-1][1]
+        want = ["--target", ",".join(k for k in rev if k in (ks[0], ks[-1]))]
+        ok = got == want
+        if not ok:
+            fail.append(f"改序后部分勾选: 期望 {want}，实得 {got}")
+        print(f"  [{'OK ' if ok else 'FAIL'}] 改序后只勾头尾 -> {got}")
 
         # --- 3. 未勾任何：拒绝启动，而不是猜一个 -------------------------
         print("\n3. 守卫：未勾选任何程序 -> 拒绝启动")

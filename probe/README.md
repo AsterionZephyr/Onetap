@@ -7,7 +7,7 @@
 ```powershell
 cd E:\TOOLS\ScriptsGames\Onetap
 python -X utf8 probe/_check_workspace.py          # 工作区门禁：exit 0 才算合格
-python -X utf8 probe/_probe_gui2_selftest.py      # GUI 两页无头自检（62 条）
+python -X utf8 probe/_probe_gui2_selftest.py      # GUI 两页无头自检（89 条，含链条清点 / 任意执行顺序 / 每节可 import / FOS 上限）
 python -X utf8 probe/zmd_wait_selfcheck.py        # 离线自检，不碰目标程序
 ```
 
@@ -65,10 +65,10 @@ python -X utf8 probe/zmd_wait_selfcheck.py        # 离线自检，不碰目标�
 | `_probe_stalled_live.py` | FAULT #30 的 STALLED 分支：真起 ok-ww 制造卡死，一路跑到收尾判 failed | 315 | 2 |
 | `_probe_watchdog.py` | watchdog 超时收尾的端到端验证（不碰真实目标程序） | 176 | 0 |
 | `_probe_run_timeout.py` | 整轮时间上限 RUN_TIMEOUT 的超时收尾（用户裁定：半小时到点关窗口关游戏） | 277 | 0 |
-| `_probe_gui2_selftest.py` | 两页 GUI 的无头自检（62 条断言，RC=0） | 386 | 5 |
+| `_probe_gui2_selftest.py` | 两页 GUI 的无头自检（89 条断言，RC=0）：含第 1 节逐程序链条清点（zmd/ww/nte 八节、fos 四节 1,2,3,9）+ **每节模块都能 import**（抓相对导入层级写错，见 [FAULT #38](../docs/FAULT-LOG.md)）、第 8 节「目标程序选择器：任意多选 + 任意顺序」、第 9 节「FOS 上限：程序声明 ↔ 节点默认 ↔ 主控注入」 | 541 | 5 |
 | `_probe_gui2_drift.py` | 清单漂移守卫真的会报警（改清单报 2 处、加未登记文件报 1 处、还原后 0 处） | 103 | 4 |
 | `_probe_gui2_runner.py` | gui.runner 真能驱动 steps/main.py（18 项，真起进程真终止） | 216 | 2 |
-| `_probe_gui_target_wire.py` | GUI 目标选择器真的把 --target 送出去了（调真实 on_run、stub Runner 看 argv） | 235 | 4 |
+| `_probe_gui_target_wire.py` | GUI 目标选择器真的把 --target 送出去了（调真实 on_run、stub Runner 看 argv）；含 2b「改序后 --target 按 _order 排列」 | 271 | 4 |
 | `_probe_gui_both_live.py` | 用真实 App 驱动 GUI 跑一次多目标串联（--dry-run 冒烟 2.5s，全程约 12 分钟） | 250 | 3 |
 | `activate_selfcheck.py` | 置前台「真实点击夺取激活」的离线自检 | 151 | 3 |
 | `apps_shims_selfcheck.py` | 共用层 __getattr__ 垫片仍指向 apps/<key> 的真身（含 programs / targets 的 self_check） | 32 | 2 |
