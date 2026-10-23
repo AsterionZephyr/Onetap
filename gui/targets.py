@@ -32,6 +32,9 @@ FALLBACK = [
     ("zmd", "MaaEnd"),
     ("ww", "ok-ww"),
     ("nte", "ok-nte"),
+    # FOS（MPA）：只启动 + 等它自己退出，不识别、不操作。
+    # 与 programs.ALL 的追加位置一致（排最后）。
+    ("fos", "FOS"),
 ]
 
 PROGRAMS_PY = os.path.join(

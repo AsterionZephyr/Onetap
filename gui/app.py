@@ -135,6 +135,10 @@ class App(tk.Tk):
         # （读 state.json 里记录的程序；`接着上次` 续跑 ok-nte 时不会被改回 ww）。
         self.follow_var = tk.BooleanVar(value=True)
         self.target_vars = {k: tk.BooleanVar(value=True) for k, _d in TARGET_PROGRAMS}
+        # 执行顺序（可在界面上任意调整）：默认 = 清单声明顺序。
+        # selected_targets() 按它过滤勾选项 —— 这个顺序就是传给 --target 的顺序，
+        # 也就是 run_multi 实际串行执行的顺序。
+        self._order = [k for k, _d in TARGET_PROGRAMS]
         # 步骤区显示哪个目标的节点状态；None = 跟着正在跑的那个走
         self._view_target = None
         # 最近一次收到节点状态的目标（None = 还没收到 / 不知道）
@@ -301,20 +305,26 @@ class App(tk.Tk):
         self._on_targets_changed()
         self._repaint_steps()
 
-    # --- 目标程序选择器（任意多选 + 全选/清空）------------------------
+    # --- 目标程序选择器（任意多选 + 任意执行顺序）---------------------
 
     def _build_target_selector(self, parent):
         """左栏顶部的目标选择器。
 
-        三件独立的东西，别混：
+        四件独立的东西，别混：
 
             ☐ 跟随上次记录        完全不传 --target（读 state.json 的记录）
-            ☑ ok-ww / ☑ ok-nte    传 `--target ww,nte`（顺序 = 清单声明顺序）
+            ☑ ok-ww / ☑ ok-nte    传 `--target ww,nte`（跑不跑由勾选决定）
+            行首的 1 2 3 + ↑↓      **执行顺序**（任意调整；顺序 = --target 的顺序）
             行尾的 ✔ 8/8          该程序**正在跑的那一轮**的进度（与勾选无关）
 
         为什么不是 Combobox：Combobox 只能单选，而需求是「任意多选 + 全选」。
         Tk 没有现成的多选列表控件，最低成本且状态一眼可见的做法就是
-        Checkbutton 一列 + 全选/清空两个按钮。
+        Checkbutton 一列 + 全选/清空两个按钮；顺序用每行一对 ↑/↓ 改
+        （拖拽要自己实现命中测试与占位线，且与本页「点行=查看该程序清单」
+        的手势冲突，收益不值）。
+
+        ⚠️ 行**必须**挂在独立的 rows_box 里：调整顺序靠重排 pack，若行与下面的
+        按钮/说明同挂 box，重新 pack 会把行挪到它们**下面**（pack 顺序 = 调用顺序）。
         """
         box = ttk.Frame(parent)
         box.pack(fill="x")
@@ -324,19 +334,32 @@ class App(tk.Tk):
             variable=self.follow_var, command=self._on_targets_changed)
         self.chk_follow.pack(anchor="w")
 
+        self._rows_box = tk.Frame(box, bg=BG)
+        self._rows_box.pack(fill="x")
+
         self._target_rows = {}
         for key, disp in TARGET_PROGRAMS:
-            row = tk.Frame(box, bg=BG)
-            row.pack(fill="x")
+            row = tk.Frame(self._rows_box, bg=BG)
+            idx = tk.Label(row, text="1", width=2, bg=BG, fg="#9e9e9e",
+                           anchor="e", font=("Segoe UI", 9))
+            idx.pack(side="left")
             chk = ttk.Checkbutton(row, text=disp, variable=self.target_vars[key],
                                   command=lambda k=key: self._on_target_chk(k))
             chk.pack(side="left")
             dot = tk.Label(row, text="\u25cb", bg=BG, fg="#9e9e9e",
                            font=("Segoe UI", 9))
             dot.pack(side="right")
-            self._target_rows[key] = {"row": row, "chk": chk, "dot": dot,
-                                      "disp": disp}
-            for w in (row, dot):
+            # side="right" 的 pack 是**从右往左**排的：先 pack 的在最右边。
+            btn_down = ttk.Button(row, text="\u2193", width=2,
+                                  command=lambda k=key: self._move_target(k, 1))
+            btn_down.pack(side="right")
+            btn_up = ttk.Button(row, text="\u2191", width=2,
+                                command=lambda k=key: self._move_target(k, -1))
+            btn_up.pack(side="right")
+            self._target_rows[key] = {"row": row, "idx": idx, "chk": chk,
+                                      "dot": dot, "disp": disp,
+                                      "up": btn_up, "down": btn_down}
+            for w in (row, idx, dot):
                 w.bind("<Button-1>",
                        lambda e, k=key: self.on_view_target(k))
                 w.configure(cursor="hand2")
@@ -349,11 +372,15 @@ class App(tk.Tk):
         self.btn_none = ttk.Button(btns, text="清空", width=6,
                                    command=self.on_select_none)
         self.btn_none.pack(side="left", padx=(4, 0))
+        self.btn_default_order = ttk.Button(btns, text="\u21ba 默认序", width=9,
+                                            command=self.on_default_order)
+        self.btn_default_order.pack(side="left", padx=(4, 0))
 
         self.lbl_pick = tk.Label(box, text="", bg=BG, fg="#555", anchor="w",
                                  wraplength=210, justify="left",
                                  font=("Microsoft YaHei UI", 8))
         self.lbl_pick.pack(fill="x", pady=(2, 0))
+        self._reflow_target_rows()
         self._on_targets_changed()
 
     def _on_targets_changed(self):
@@ -390,10 +417,60 @@ class App(tk.Tk):
         return "目标：" + (",".join(picked) if picked else "（未选）")
 
     def selected_targets(self):
-        """勾选的程序 key，顺序 = 清单声明顺序（= 执行顺序）。"""
+        """勾选的程序 key，顺序 = self._order（= 界面上 1 2 3 的顺序）。
+
+        ⚠️ 这里**不能**遍历 TARGET_PROGRAMS：那会把顺序钉死成声明顺序，
+        界面上的 ↑/↓ 就成了纯装饰 —— 看着换了顺序、实际执行顺序没变，
+        正是本仓库反复踩的静默失效。
+        """
         if self.follow_var.get():
             return []
-        return [k for k, _d in TARGET_PROGRAMS if self.target_vars[k].get()]
+        return [k for k in self._order if self.target_vars[k].get()]
+
+    # --- 执行顺序（任意调整）------------------------------------------
+
+    def _reflow_target_rows(self):
+        """按 self._order 重排行，并刷新序号与 ↑/↓ 的可用性（首尾禁用）。"""
+        for key in self._order:
+            self._target_rows[key]["row"].pack_forget()
+        last = len(self._order) - 1
+        for i, key in enumerate(self._order):
+            r = self._target_rows[key]
+            r["row"].pack(fill="x")
+            r["idx"].config(text=str(i + 1))
+            r["up"].config(state="normal" if i > 0 else "disabled")
+            r["down"].config(state="normal" if i < last else "disabled")
+
+    def _move_target(self, key, delta):
+        """把某个程序上移/下移一格（delta = -1 / +1）。
+
+        顺序只在手动模式下有意义（跟随记录时根本不传 --target），故与勾选
+        同一处理：动一下 = 明确要手动，自动关掉跟随，避免"改了顺序却没生效"。
+        """
+        if key not in self._order:
+            return
+        i = self._order.index(key)
+        j = i + delta
+        if not (0 <= j < len(self._order)):
+            return
+        if self.follow_var.get():
+            self.follow_var.set(False)
+        self._order[i], self._order[j] = self._order[j], self._order[i]
+        self._reflow_target_rows()
+        self._on_targets_changed()
+
+    def on_default_order(self):
+        """恢复默认顺序（= programs.ALL 的声明顺序）。
+
+        与勾选/加减序同一处理：点它 = 明确在调执行顺序，只在手动模式下有意义，
+        所以也把「跟随上次记录」关掉 —— 否则跟随中点了它，界面看着复位了、
+        实际仍按记录跑（静默失效）。
+        """
+        if self.follow_var.get():
+            self.follow_var.set(False)
+        self._order = [k for k, _d in TARGET_PROGRAMS]
+        self._reflow_target_rows()
+        self._on_targets_changed()
 
     def on_select_all(self):
         self.follow_var.set(False)
@@ -422,12 +499,18 @@ class App(tk.Tk):
         if not hasattr(self, "_target_rows"):
             return
         if enabled:
+            # 先按当前的 _order 重排：_reflow 会把首尾的 ↑/↓ 重新禁用，
+            # 比在这里逐个恢复更不容易漏（漏了就是"运行期点得动"的假象）。
+            self._reflow_target_rows()
             self._on_targets_changed()
             self.chk_follow.config(state="normal")
+            self.btn_default_order.config(state="normal")
         else:
             for r in self._target_rows.values():
                 r["chk"].config(state="disabled")
-            for btn in (self.btn_all, self.btn_none):
+                r["up"].config(state="disabled")
+                r["down"].config(state="disabled")
+            for btn in (self.btn_all, self.btn_none, self.btn_default_order):
                 btn.config(state="disabled")
             self.chk_follow.config(state="disabled")
 
