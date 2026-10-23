@@ -1,4 +1,4 @@
-"""orchestrator.programs — 目标程序表（ok-ww / ok-nte）
+"""orchestrator.programs — 目标程序表（ok-ww / ok-nte / MaaEnd / FOS）
 
 **为什么要有这个模块**：框架原本把 ok-ww 的具体值**硬编码**在 `window.py`
 （`OKWW_TITLE_RE` / `OKWW_EXE` / `OKWW_DIR` / 进程名列表 / 窗口类前缀）与
@@ -97,7 +97,8 @@ class Program:
                  process_names, loose_title_re, ready_title_re,
                  min_width, min_height, game_names=None, game_title_re=None,
                  window_class=None, has_second_layer=True,
-                 second_layer_exe=None, logdir=None, log_glob="ok-script*.log"):
+                 second_layer_exe=None, logdir=None, log_glob="ok-script*.log",
+                 run_timeout=None, wait_flag=None, wait_sid="3"):
         self.key = key
         self.display = display
         self.exe = exe
@@ -144,6 +145,23 @@ class Program:
         # MaaEnd 在 <root>/debug 下的 mxu-tauri.log。
         self.logdir = logdir
         self.log_glob = log_glob
+
+        # 该程序**自己**建议的整轮墙钟上限（秒）；None = 用主控默认（1800s）。
+        # 为什么需要：三个操作型程序的链条固定在半小时量级，而 FOS 是
+        # 「启动后自己跑完」—— 实测一轮 **73 分钟**（run-20261023-055917，4379s）。
+        # 主控的 --run-timeout 一旦小于它，会在 FOS 还没跑完时把它掐掉，
+        # 而 GUI 并不暴露 --run-timeout ⇒ 没有这个字段，GUI 里 FOS 必然假超时。
+        # 命令行显式给的 --run-timeout 仍然优先。
+        self.run_timeout = run_timeout
+
+        # 该程序「等它自己退出」那一节的上限**旗标名**（None = 没有这种节点）。
+        # 主控据此把**剩余墙钟时间**当上限传下去（同节点 8 的 --total-timeout）：
+        # 节点一旦开始睡，主控无法打断它 —— deadline 只在节与节之间检查 ——
+        # 故睡的那个必须自带「睡到上限就醒」。
+        # FOS 的节点 3 就是这种节点（apps/fos/nodes/step3_wait_exit.py）。
+        self.wait_flag = wait_flag
+        # 那个节点在**该程序自己的**链条里的编号（默认 3，FOS 就是 3）。
+        self.wait_sid = str(wait_sid)
 
     def owns_process(self, exe_path):
         """该进程是否属于本程序。
@@ -308,12 +326,54 @@ ZMD = Program(
     log_glob="mxu-tauri.log",
 )
 
+# --- FOS（MPA）-------------------------------------------------------------
+# 第 4 个目标程序。与前三个**都不同形**：它没有可编排的界面。
+# 用户裁定（2026-10-23）：只启动，之后等它自己退出并清理干净，全程不需要
+# 任何识别、操作；也不要研究它的内部逻辑。
+#
+# 故这条记录里有两处是**刻意留空**的（只为满足 Program 的结构）：
+#   loose_title_re / ready_title_re：FOS 的窗口从不被查找，正则永远不会命中
+#       （找个"像 FOS"的标题没有意义，我们根本不需要看它的界面）；
+#   min_width/min_height = 0：它不需要满足任何尺寸判据。
+# 真正常用的只有四个字段：exe（启动）、process_prefix（归属）、
+# second_layer_exe（自检样本）、has_second_layer=False（没有第二层）。
+#
+# ⚠️ process_prefix 取**整个 MPA 目录**（ok-ww/ok-nte 是精确到
+# data/apps/<name>）：FOS 是单文件 PyInstaller，运行期拉起 MFWUpdater.exe 等
+# 子进程，它们散在目录各处。这不违反 FAULT #32 —— MPA 目录里没有别的被编排
+# 程序，放宽前缀不会把 ok-ww/ok-nte/MaaEnd 算进来（自检会逐对验这条）。
+FOS = Program(
+    key="fos",
+    display="FOS",
+    # 第一层就是干活的那个（单层）；启动后它自己跑完退出
+    exe=r"E:\TOOLS\ScriptsGames\MPA\FOS.exe",
+    root_dir=r"E:\TOOLS\ScriptsGames\MPA",
+    process_prefix=r"E:\TOOLS\ScriptsGames\MPA",
+    process_names=["FOS.exe"],
+    loose_title_re=r"(?i)FOS",
+    ready_title_re=r"(?i)FOS\s+v[\d.]+",
+    min_width=0,
+    min_height=0,
+    # 单层：FOS.exe 自己就是全部；启动后不再有"第二层"可等
+    has_second_layer=False,
+    # 自检样本：证明 process_prefix 覆盖目录下的**其它** exe（更新器）
+    second_layer_exe=r"E:\TOOLS\ScriptsGames\MPA\MFWUpdater\MFWUpdater.exe",
+    # 整轮上限 5400s（90 分钟）：实测一轮 4379s（≈73 分钟，run-20261023-055917），
+    # 留 ~23% 余量。主控的 --run-timeout 显式给出时仍以命令行为准。
+    run_timeout=5400.0,
+    # 节点 3 会一直睡到自己的 --wait-timeout；主控把「剩余墙钟」当上限灌给它，
+    # 保证它不会睡到主控上限之外（否则主控根本没机会检查 deadline）。
+    wait_flag="--wait-timeout",
+)
+
 # 顺序 = **默认串联顺序**（用户裁定，2026-10-19）：
 #     MaaEnd 必须排第一。理由：三个程序里它最可能出问题（单层 Tauri、判据看日志、
 #     要自己拉起启动器和游戏），排在最后的话前面两个跑完才发现它、或者它把机器
 #     搞脏；排第一则它的失败只污染自己 —— run_multi 任一程序失败都会继续跑下一个。
 # 加新程序时**追加在末尾**，别插到 MaaEnd 前面。
-ALL = [ZMD, WW, NTE]
+# FOS（第 4 个）按这条排在最后：它只启动 + 等退出，不抢界面、不判画面，
+# 但仍会自己动游戏 —— 排在后面，前面三个的失败不会把它连累进来。
+ALL = [ZMD, WW, NTE, FOS]
 BY_KEY = {p.key: p for p in ALL}
 
 # 默认程序：**保持 ok-ww**，使既有调用方行为不变（本次改动不加回归）。

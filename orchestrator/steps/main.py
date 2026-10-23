@@ -64,6 +64,11 @@ PASSTHROUGH = [
     # FAULT #30 的 STALLED 分支默认要等 90s 才判死；转发出去是为了让
     # 验证/SELFTEST 能把它调小，不必真等一分半。
     ("stall_grace", "8", "--stall-grace", True),
+    # FOS 只有这一节是"等"。它的上限有两个来源：程序声明（programs.FOS.run_timeout）
+    # 与主控在起它之前灌进来的**剩余墙钟**（见 run_one 里的 wait_flag 分支）——
+    # 少了任何一条，睡得久的程序要么被提前掐、要么把整轮拖过上限（FAULT #39）。
+    ("wait_timeout", "3", "--wait-timeout", True),
+    ("poll", "3", "--poll", True),
     ("force_clean", "9", "--force", False),
 ]
 
@@ -106,8 +111,9 @@ def build_parser():
     #   多个（ww,nte / all）  -> 逐个各跑一遍完整链条，各占一个子目录
     #   `both` 是历史写法，等价于 `all`。
     p.add_argument("--target", default=None, metavar="LIST",
-                   help="目标程序：ww=ok-ww / nte=ok-nte / "
-                        "ww,nte（逗号分隔，任意多个、按书写顺序） / all。"
+                   help="目标程序：zmd=MaaEnd / ww=ok-ww / nte=ok-nte / "
+                        "fos=FOS（MPA）；逗号分隔、任意多个、**按书写顺序**"
+                        "执行（GUI 的 ↑/↓ 改的就是这个顺序） / all。"
                         "多个时**逐个各跑一轮完整链条**，各占一个子目录。"
                         "开跑时写入 state.json，全链共享")
 
@@ -127,15 +133,22 @@ def build_parser():
     g.add_argument("--stall-grace", type=float, default=None,
                    help="[节点 8] 执行器暂停后给它多少秒自行恢复；"
                         "仍无进展才判 STALLED（默认 90）")
+    g.add_argument("--wait-timeout", type=float, default=None,
+                   help="[节点 3] FOS 等它自行退出的上限（秒）。省略时由主控"
+                        "把剩余墙钟灌进去；单独跑该节点时取程序声明的默认（FOS 5400）")
+    g.add_argument("--poll", type=float, default=None,
+                   help="[节点 3] FOS 进程表采样间隔（秒，默认 1.0）")
     g.add_argument("--force-clean", action="store_true",
                    help="[节点 9] 忽略结果，强制走清理路径")
 
     # --- 整轮墙钟上限（用户裁定：半小时）---------------------------------
     g2 = p.add_argument_group("整轮时间上限")
-    g2.add_argument("--run-timeout", type=float, default=RUN_TIMEOUT,
-                    help=f"整轮运行的墙钟上限（秒），默认 {RUN_TIMEOUT:.0f}"
-                         "（半小时）。到点由 watchdog 关闭目标程序窗口与游戏"
-                         "窗口，必要时杀进程。设 0 则不限制")
+    g2.add_argument("--run-timeout", type=float, default=None,
+                    help="**每个程序**的墙钟上限（秒）。省略时用程序自己声明的"
+                         "上限：FOS 5400（实测一轮 73 分钟），其余 "
+                         f"{RUN_TIMEOUT:.0f}（半小时）。到点由 watchdog 关闭目标"
+                         "程序窗口与游戏窗口，必要时杀进程。设 0 则不限制")
+
     g2.add_argument("--keep-game", action="store_true",
                     help="超时收尾时**保留**游戏，只关目标程序"
                          "（默认按用户裁定：窗口和游戏都关）")
@@ -215,7 +228,8 @@ def print_chain(picked=None):
                 print(f"          {n.why}")
     print()
     print("  ★ = 这一节有程序专属参数（细节见该节点模组的 -h）")
-    print("  （无节点 3：实机复核证明「跨过第一层」不存在）")
+    print("  （共用链里缺 3：实机复核证明「跨过第一层」那一步不存在；"
+          "FOS 的 3 是它自己的「等它自己退出」，与缺号无关）")
 
 
 def run_one(args, log, prog, run_dir, ids):
@@ -228,13 +242,20 @@ def run_one(args, log, prog, run_dir, ids):
     state.json 里的 program 只能存一个值。抽出来才能干净地跑多轮。
     """
     # --- 逐节执行 -----------------------------------------------------
-    # 整轮墙钟上限（用户裁定：半小时，到点关窗口 + 关游戏）。
+    # 本程序的墙钟上限（到点关窗口 + 关游戏）。
     # 粒度是「节」：每节之间检查一次。若某一节自己挂住，主控会一直等它 ——
-    # 故 step8 的 --total-timeout 由下面推导出**不超过剩余时间**，两者互补。
-    deadline = watchdog.Deadline(args.run_timeout, log=log)
+    # 故 step8 的 --total-timeout 与 wait 节点的 --wait-timeout 都由下面推导出
+    # **不超过剩余时间**，三者互补。
+    # 上限取「命令行显式值」优先，否则用该程序自己声明的 run_timeout，
+    # 再否则用主控默认。为什么按程序：FOS 实测要 73 分钟，三个操作型程序
+    # 都在半小时内 —— 一条统一上限必然要么掐死 FOS、要么让卡死的操作型程序
+    # 多挂一小时。
+    limit = (args.run_timeout if args.run_timeout is not None
+             else (prog.run_timeout or RUN_TIMEOUT))
+    deadline = watchdog.Deadline(limit, log=log)
     deadline.begin()
-    if args.run_timeout > 0 and not args.no_watchdog:
-        log(f"\n[时间上限] 整轮 {args.run_timeout:.0f}s（{args.run_timeout/60:.0f} 分钟）"
+    if limit > 0 and not args.no_watchdog:
+        log(f"\n[时间上限] 整轮 {limit:.0f}s（{limit/60:.0f} 分钟）"
             f"，到点关闭目标程序窗口与游戏")
     elif args.no_watchdog:
         log("\n[时间上限] 已停用（--no-watchdog）")
@@ -276,12 +297,24 @@ def run_one(args, log, prog, run_dir, ids):
         # --- 把「剩余时间」传给节点 8，避免它跑过总上限 -------------------
         # 用户裁定单程序半小时；step8 自己的兜底不能比总上限还长，
         # 否则总上限只能在节点 8 **返回之后**才生效。
-        if (sid == "8" and args.run_timeout > 0 and not args.no_watchdog
+        if (sid == "8" and limit > 0 and not args.no_watchdog
                 and "--total-timeout" not in cmd):
             remain = deadline.remaining()
             if remain > 0:
                 cmd.extend(["--total-timeout", f"{remain:.0f}"])
                 log(f"  [时间上限] 节点 8 兜底设为剩余 {remain:.0f}s")
+
+        # --- 把「剩余时间」传给「等它自己退出」的节点 ---------------------
+        # 同节点 8 的 --total-timeout：节点一旦开始睡，主控无法打断它
+        # （deadline 只在节与节之间检查）⇒ 睡的那个必须自带「睡到上限就醒」。
+        # 用户显式给了就尊重用户的（step_specific_args 里已有）。
+        if (sid == prog.wait_sid and prog.wait_flag and limit > 0
+                and not args.no_watchdog
+                and prog.wait_flag not in step_specific_args(args, sid)):
+            remain = deadline.remaining()
+            if remain > 0:
+                cmd.extend([prog.wait_flag, f"{remain:.0f}"])
+                log(f"  [时间上限] 节点 {sid} 等待上限设为剩余 {remain:.0f}s")
 
         log("\n" + "=" * 74)
         log(f"[主控] 启动节点 {sid} {name}")

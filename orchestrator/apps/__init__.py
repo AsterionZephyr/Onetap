@@ -28,6 +28,9 @@ ADAPTERS = {
     "ww": "orchestrator.apps.ww",
     "nte": "orchestrator.apps.nte",
     "zmd": "orchestrator.apps.zmd",
+    # FOS：没有可编排的界面（只启动 + 等它自己退出），但它的"怎么算跑完"
+    # 是专属判据（进程表），故照样有自己的包，见 apps/fos/__init__.py。
+    "fos": "orchestrator.apps.fos",
 }
 
 
